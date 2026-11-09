@@ -496,7 +496,7 @@ function ensureApi() {
       enablePlayer: true,
       enableCursor: true,
       enableAnimatedBeatCursor: true,
-      soundFont: abs('vendor/alphatab/soundfont/sonivox.sf2'),
+      soundFont: abs('vendor/alphatab/soundfont/GeneralUser-GS.sf2'),
       scrollElement: $('#viewport'),
       scrollOffsetY: -40,
     },
