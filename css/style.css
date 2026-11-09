@@ -45,7 +45,8 @@ button { background: none; border: 0; padding: 0; cursor: pointer; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .center { text-align: center; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+/* курсор табов не трогаем: alphaTab двигает его через transition, без неё он «мигает» */
+@media (prefers-reduced-motion: reduce) { *:not(.at-cursor-beat) { transition: none !important; animation: none !important; } }
 
 #app { height: 100dvh; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; }
 main { flex: 1; min-height: 0; position: relative; }
@@ -215,7 +216,7 @@ input.filled::-webkit-slider-runnable-track { background: linear-gradient(90deg,
 
 /* alphaTab курсор */
 .at-surface { font-family: sans-serif; }
-.at-cursors { position: absolute; top: 0; left: 0; }
+.at-cursors { position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; }
 .at-cursor-bar { background: rgba(240,163,58,.08); }
 .at-cursor-beat { background: var(--amber); width: 3px; border-radius: 2px; box-shadow: 0 0 8px rgba(240,163,58,.6); }
 .at-selection div { background: rgba(240,163,58,.16); }
@@ -229,6 +230,15 @@ input.filled::-webkit-slider-runnable-track { background: linear-gradient(90deg,
 .genres button::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex: none; transition: background .2s, box-shadow .2s; }
 .genres button.on { color: var(--text); }
 .genres button.on::before { background: var(--amber); box-shadow: 0 0 8px rgba(240,163,58,.6); }
+.riff-mode { margin: 4px 0 12px; }
+.style-q { margin: 6px 0 0; }
+.style-q input { font-size: 16px; }
+.ai-status { font-size: 13px; color: var(--muted); margin: 8px 0 2px; line-height: 1.45; min-height: 19px; }
+.ai-status b { color: var(--text); font-weight: 600; }
+.ai-status button { color: var(--amber); font-size: 13px; padding: 0; text-decoration: underline; text-underline-offset: 2px; }
+.train-progress { height: 3px; margin-top: 10px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.train-progress i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .3s; }
+#btn-generate:disabled { opacity: .75; }
 .fields { margin-top: 10px; }
 .row-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); }
 .rf-name { font-weight: 500; white-space: nowrap; }

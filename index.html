@@ -129,6 +129,7 @@
           <button id="chip-metro" class="chip">Метроном</button>
           <button id="chip-count" class="chip">Отсчёт</button>
           <button id="chip-view" class="chip">Табы</button>
+          <button id="chip-vary" class="chip hidden">Вариация</button>
           <button id="chip-dice" class="chip hidden">Ещё рифф</button>
         </div>
       </div>
@@ -138,7 +139,16 @@
     <section id="view-riff" class="view">
       <header class="top"><h1>Рифф</h1></header>
       <div class="scroll">
+        <div id="riff-mode" class="seg riff-mode">
+          <button data-v="ai" class="on">ИИ: учится на песнях</button>
+          <button data-v="simple">Простой</button>
+        </div>
         <div id="genres" class="genres"></div>
+        <form id="style-form" class="search style-q">
+          <input id="style-input" type="text" placeholder="Свой стиль: «грув», «Deftones, Tool»…" autocomplete="off" enterkeyhint="go">
+          <button type="submit" class="chip">Выбрать</button>
+        </form>
+        <div id="ai-status" class="ai-status"></div>
 
         <div class="fields">
           <div class="row-field">
@@ -155,14 +165,15 @@
             <button id="riff-tuning" class="pill">Как в жанре</button>
           </div>
           <div class="row-field">
-            <div class="rf-name">Ударные</div>
+            <div class="rf-name">Бас и ударные</div>
             <button id="riff-drums" class="chip on">Вкл</button>
           </div>
         </div>
 
-        <button id="btn-generate" class="primary big">Сгенерировать рифф</button>
+        <button id="btn-generate" class="primary big">Сочинить рифф</button>
+        <div id="train-progress" class="train-progress hidden"><i></i></div>
 
-        <h2 class="sub-h">Похожие песни на Songsterr</h2>
+        <h2 class="sub-h" id="similar-h">Похожие песни на Songsterr</h2>
         <div id="similar"></div>
       </div>
     </section>

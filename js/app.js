@@ -1,6 +1,7 @@
 import { TUNINGS, NOTE_NAMES, getTuning, noteName, noteOctave, midiToLabel, midiToFreq, freqToMidi, matchTuning } from './tunings.js';
 import { PitchDetector } from './tuner.js';
 import { GENRES, generateRiff } from './riff.js';
+import { STYLES, parseStyleQuery, trainModel, generateRiff as aiRiff, varyRiff, collectSongs, MODEL_VERSION, tuningLabel } from './riffai.js';
 import { bundleToTex } from './songsterr.js';
 import { installAmpHook, setAmp, AMP, loadAmpPrefs, saveAmpPrefs } from './amp.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
@@ -656,6 +657,7 @@ function loadScore(data, meta, alreadyInPlayer) {
   curSong = meta;
   lastRiff = meta.riff || null;
   $('#chip-dice').classList.toggle('hidden', !lastRiff);
+  $('#chip-vary').classList.toggle('hidden', !(lastRiff && lastRiff.ai));
   clearLoop();
   showLoader('Рисую табы…');
   $('#seek').value = 0;
@@ -670,6 +672,7 @@ function loadTex(tex, meta) {
   curSong = meta;
   lastRiff = meta.riff || null;
   $('#chip-dice').classList.toggle('hidden', !lastRiff);
+  $('#chip-vary').classList.toggle('hidden', !(lastRiff && lastRiff.ai));
   clearLoop();
   showLoader('Рисую табы…');
   $('#seek').value = 0;
@@ -957,7 +960,13 @@ $('#btn-sound').onclick = () => {
 };
 
 /* ================= РИФФ ================= */
-const riffState = { genre: 'numetal', tempoAuto: true, tempo: 100, bars: 4, tuning: 'auto', drums: true };
+// Два режима: «ИИ» учится на табах песен выбранного стиля, «Простой» — старый генератор (запасной, без интернета)
+const riffState = {
+  mode: store.get('riffMode', 'ai'),
+  genre: 'numetal',
+  style: { key: 'numetal', name: STYLES.numetal.name, artists: STYLES.numetal.artists, builtin: true },
+  tempoAuto: true, tempo: 100, bars: 4, tuning: 'auto', drums: true,
+};
 const genresBox = $('#genres');
 Object.entries(GENRES).forEach(([id, g]) => {
   const b = document.createElement('button');
@@ -966,11 +975,39 @@ Object.entries(GENRES).forEach(([id, g]) => {
   if (id === riffState.genre) b.className = 'on';
   b.onclick = () => {
     riffState.genre = id;
+    const st = STYLES[id];
+    riffState.style = { key: id, name: st ? st.name : g.name, artists: st ? st.artists : [], builtin: true };
+    $('#style-input').value = '';
     $$('#genres button').forEach((x) => x.classList.toggle('on', x === b));
+    updateAiStatus();
     loadSimilar();
   };
   genresBox.append(b);
 });
+
+// Свой стиль: жанр словами («грув», «пост-хардкор») или группы через запятую
+$('#style-form').onsubmit = (e) => {
+  e.preventDefault();
+  const st = parseStyleQuery($('#style-input').value);
+  if (!st) return;
+  $('#style-input').blur();
+  riffState.style = st;
+  if (GENRES[st.key]) riffState.genre = st.key;
+  $$('#genres button').forEach((x) => x.classList.toggle('on', x.dataset.id === st.key));
+  if (riffState.mode !== 'ai') setRiffMode('ai');
+  updateAiStatus();
+  loadSimilar();
+  toast(st.builtin ? `Стиль: ${st.name}` : `Учусь на: ${st.name}`);
+};
+
+function setRiffMode(m) {
+  riffState.mode = m;
+  store.set('riffMode', m);
+  $$('#riff-mode button').forEach((x) => x.classList.toggle('on', x.dataset.v === m));
+  $('#style-form').classList.toggle('hidden', m !== 'ai');
+  updateAiStatus();
+}
+$$('#riff-mode button').forEach((b) => (b.onclick = () => setRiffMode(b.dataset.v)));
 
 const tempoEl = $('#tempo');
 function syncTempoUi() {
@@ -1001,6 +1038,90 @@ $('#riff-drums').onclick = (e) => {
   e.currentTarget.textContent = riffState.drums ? 'Вкл' : 'Выкл';
 };
 
+/* --- модели: хранятся в телефоне, по одной на стиль --- */
+const models = new Map();
+const modelKey = (st) => 'riffai:' + st.key;
+function getModel(st) {
+  if (models.has(st.key)) return models.get(st.key);
+  const m = store.get(modelKey(st), null);
+  if (m && m.v === MODEL_VERSION) { models.set(st.key, m); return m; }
+  return null;
+}
+function saveModel(st, m) {
+  models.set(st.key, m);
+  store.set(modelKey(st), m);
+  // список обученных стилей, чтобы старые можно было чистить
+  const list = store.get('riffaiList', []).filter((k) => k !== st.key);
+  list.unshift(st.key);
+  for (const old of list.slice(12)) try { localStorage.removeItem('riffai:' + old); } catch (e) {}
+  store.set('riffaiList', list.slice(0, 12));
+}
+
+let training = null; // идёт обучение: { key, promise }
+function setProgress(frac, text) {
+  const bar = $('#train-progress');
+  bar.classList.toggle('hidden', frac == null);
+  if (frac != null) $('i', bar).style.width = Math.round(frac * 100) + '%';
+  const btn = $('#btn-generate');
+  btn.disabled = frac != null;
+  btn.textContent = frac != null ? text : 'Сочинить рифф';
+}
+
+async function ensureModel(st, force) {
+  if (!force) { const m = getModel(st); if (m) return m; }
+  if (training && training.key === st.key) return training.promise;
+  const promise = (async () => {
+    try {
+      setProgress(0.02, 'Ищу песни…');
+      const songs = await collectSongs(st, { searchSongs, fetchTab }, (done, total, txt) => {
+        setProgress(0.05 + 0.85 * (done / total), `Учусь: ${done}/${total}`);
+        $('#ai-status').textContent = txt;
+      });
+      setProgress(0.95, 'Учусь…');
+      const m = trainModel(songs, { key: st.key, name: st.name });
+      if (m.songs.length < 2 || !Object.keys(m.rhythms).length) throw new Error('Нашлось слишком мало подходящих табов. Попробуй другие группы.');
+      saveModel(st, m);
+      return m;
+    } finally {
+      training = null;
+      setProgress(null);
+      updateAiStatus();
+      loadSimilar(); // показать, на чём учился ИИ
+    }
+  })();
+  training = { key: st.key, promise };
+  return promise;
+}
+
+function updateAiStatus() {
+  const box = $('#ai-status');
+  if (riffState.mode !== 'ai') { box.textContent = 'Простой генератор: правила жанра, работает без интернета.'; return; }
+  if (!getApiBase()) { box.innerHTML = 'Для ИИ нужен воркер Songsterr: подключи его на вкладке «Песни». Пока работает простой генератор.'; return; }
+  if (training) return;
+  const st = riffState.style;
+  const m = getModel(st);
+  if (m) {
+    const d = new Date(m.at);
+    box.innerHTML = `<b>${esc(st.name)}</b>: обучен на ${m.songs.length} песнях · ${d.toLocaleDateString('ru-RU')} · <button id="ai-retrain">переобучить</button>`;
+    $('#ai-retrain').onclick = async () => {
+      try { await ensureModel(st, true); toast('Модель обновлена'); } catch (e) { toast(e.message || 'Не получилось', 4000); }
+    };
+  } else {
+    box.innerHTML = `<b>${esc(st.name)}</b>: при первом запуске скачаю ~20 песен этого стиля и выучу их риффы (около минуты, потом мгновенно).`;
+  }
+}
+
+function riffOpts() {
+  return {
+    bars: riffState.bars,
+    tempo: riffState.tempoAuto ? undefined : riffState.tempo,
+    tuningNotes: riffState.tuning === 'auto' ? undefined : getTuning(riffState.tuning).notes,
+    drums: riffState.drums,
+    bass: riffState.drums,
+  };
+}
+
+// простой (запасной) генератор
 function makeRiff(seed) {
   return generateRiff({
     genre: riffState.genre,
@@ -1014,21 +1135,60 @@ function makeRiff(seed) {
 function openRiff(r) {
   loadTex(r.tex, { id: null, title: r.title, artist: `${r.genre} · ${r.tempo} BPM · ${r.tuning}`, riff: r });
 }
-$('#btn-generate').onclick = () => openRiff(makeRiff());
-$('#chip-dice').onclick = () => openRiff(makeRiff());
+function openAiRiff(r, st) {
+  const meta = { ...r, ai: true, styleKey: st.key, styleName: st.name, style: st };
+  loadTex(r.tex, { id: null, title: r.title, artist: `${st.name} · ${r.tempo} BPM · ${tuningLabel(r.tuning)}`, riff: meta });
+}
 
+async function composeRiff() {
+  const useAi = riffState.mode === 'ai' && getApiBase();
+  if (!useAi) return openRiff(makeRiff());
+  const st = riffState.style;
+  try {
+    const m = await ensureModel(st);
+    openAiRiff(aiRiff(m, riffOpts()), st);
+  } catch (e) {
+    toast((e && e.message) || 'Не получилось обучиться', 4500);
+  }
+}
+$('#btn-generate').onclick = composeRiff;
+
+// «Ещё рифф» в плеере: тем же способом, каким сделан текущий
+$('#chip-dice').onclick = () => {
+  if (lastRiff && lastRiff.ai) {
+    const m = models.get(lastRiff.styleKey) || getModel(lastRiff.style);
+    if (m) return openAiRiff(aiRiff(m, { ...lastRiff.opts, tempo: riffState.tempoAuto ? undefined : lastRiff.opts.tempo }), lastRiff.style);
+  }
+  openRiff(makeRiff());
+};
+// «Вариация»: тот же рифф, но развитый
+$('#chip-vary').onclick = () => {
+  if (!lastRiff || !lastRiff.ai) return;
+  const m = models.get(lastRiff.styleKey) || getModel(lastRiff.style);
+  if (!m) return toast('Модель стиля не найдена — сочини рифф заново');
+  openAiRiff(varyRiff(m, lastRiff), lastRiff.style);
+  toast('Вариация ' + ((lastRiff.gen || 0)), 1400);
+};
+
+/* --- песни стиля: на чём учился ИИ, или образцы жанра --- */
 let similarCache = {};
 async function loadSimilar() {
   const box = $('#similar');
+  const st = riffState.style;
+  const m = riffState.mode === 'ai' ? getModel(st) : null;
+  if (m && m.songs.length) {
+    $('#similar-h').textContent = 'На чём учился ИИ';
+    return renderSimilar(m.songs.filter((s) => s.id));
+  }
+  $('#similar-h').textContent = 'Похожие песни на Songsterr';
   if (!getApiBase()) { box.innerHTML = '<div class="note-box">Подключи воркер Cloudflare в настройках на вкладке «Песни» — здесь появятся песни этого стиля с табами.</div>'; return; }
-  const id = riffState.genre;
+  const id = st.key;
   if (similarCache[id]) return renderSimilar(similarCache[id]);
   box.innerHTML = '<div class="spinner-line">Ищу песни…</div>';
-  const results = await Promise.all(
-    GENRES[id].queries.map((q) => searchSongs(q, 1).then((r) => r[0]).catch(() => null))
-  );
+  const queries = GENRES[id] && st.builtin ? GENRES[id].queries : st.artists.slice(0, 5);
+  const results = await Promise.all(queries.map((q) => searchSongs(q, 1).then((r) => r[0]).catch(() => null)));
   similarCache[id] = results.filter(Boolean);
-  if (riffState.genre === id) renderSimilar(similarCache[id]);
+  if (riffState.style.key === id) renderSimilar(similarCache[id]);
 }
 function renderSimilar(list) {
   const box = $('#similar');
@@ -1036,6 +1196,7 @@ function renderSimilar(list) {
   if (!list.length) { box.innerHTML = '<div class="spinner-line">Не удалось получить песни</div>'; return; }
   list.forEach((s) => box.append(songRow(s)));
 }
+setRiffMode(riffState.mode);
 loadSimilar();
 syncTempoUi();
 renderSongs();
