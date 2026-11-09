@@ -465,11 +465,13 @@ const abs = (p) => new URL(p, location.href).href;
 
 /* --- звуки и микшер --- */
 const SOUNDFONTS = {
+  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: 'vendor/alphatab/soundfont/EGuitar_Amp.sf3' },
   muse: { name: 'MuseScore General', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3' },
   gu: { name: 'GeneralUser GS', file: 'vendor/alphatab/soundfont/GeneralUser-GS.sf2' },
 };
-let sfId = 'muse';
-try { const v = localStorage.getItem('sf'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
+let overlayApplied = false;
+let sfId = 'amp';
+try { const v = localStorage.getItem('sfv2'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
 let mixMode = 'focus'; // focus | equal | minus
 try { const v = localStorage.getItem('mixMode'); if (['focus', 'equal', 'minus'].includes(v)) mixMode = v; } catch (e) {}
 let userVol = new Map(); // индекс дорожки -> 0..1 (ручная правка)
@@ -496,8 +498,9 @@ function applyMix() {
 function setSoundfont(id) {
   if (!SOUNDFONTS[id] || id === sfId || !api) return;
   sfId = id;
-  try { localStorage.setItem('sf', id); } catch (e) {}
+  try { localStorage.setItem('sfv2', id); } catch (e) {}
   playerReady = false;
+  overlayApplied = false;
   $('#btn-play').disabled = true;
   toast('Загружаю звук: ' + SOUNDFONTS[id].name + '…', 4000);
   api.loadSoundFont(abs(SOUNDFONTS[id].file), false);
@@ -517,7 +520,7 @@ function ensureApi() {
   if (api) return api;
   if (!window.alphaTab) { toast('Не загрузился плеер табов'); return null; }
   const A = window.alphaTab;
-  api = new A.AlphaTabApi($('#at'), {
+  api = window.__api = new A.AlphaTabApi($('#at'), {
     core: { fontDirectory: abs('vendor/alphatab/font/'), useWorkers: true },
     display: {
       layoutMode: A.LayoutMode.Page,
@@ -562,6 +565,10 @@ function ensureApi() {
     if (!playerReady && e.total && e.loaded === 0) toast('Загружаю звуки гитары…');
   });
   api.playerReady.on(() => {
+    if (SOUNDFONTS[sfId].overlay && !overlayApplied) {
+      overlayApplied = true;
+      api.loadSoundFont(abs(SOUNDFONTS[sfId].overlay), true);
+    }
     playerReady = true;
     $('#btn-play').disabled = false;
     applyMix();
