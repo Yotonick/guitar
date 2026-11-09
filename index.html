@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Guitar</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="config.js"></script>
+</head>
+<body>
+<div id="app">
+  <main>
+    <!-- ТЮНЕР -->
+    <section id="view-tuner" class="view active">
+      <header class="top">
+        <h1>Тюнер</h1>
+        <button id="btn-tuning" class="pill"><span id="tuning-name">Стандарт (E)</span><svg viewBox="0 0 24 24" class="ic sm"><path d="M6 9l6 6 6-6"/></svg></button>
+      </header>
+      <div class="tuner-body">
+        <div class="gauge-wrap">
+          <svg id="gauge" viewBox="0 0 300 162" aria-hidden="true">
+            <path id="gauge-arc" d="M 30 150 A 120 120 0 0 1 270 150" class="g-arc"/>
+            <path id="gauge-zone" class="g-zone"/>
+            <g id="gauge-ticks"></g>
+            <g id="needle"><line x1="150" y1="150" x2="150" y2="46" class="g-needle"/><circle cx="150" cy="150" r="6" class="g-hub"/></g>
+            <text x="22" y="170" class="g-label">♭</text>
+            <text x="278" y="170" class="g-label" text-anchor="end">♯</text>
+          </svg>
+          <div class="note-readout">
+            <div id="note-big">–</div>
+            <div id="note-hz">Сыграйте струну</div>
+            <div id="note-hint" class="hint">&nbsp;</div>
+          </div>
+        </div>
+        <div class="seg" id="tuner-mode">
+          <button data-mode="strings" class="on">Струны</button>
+          <button data-mode="chromatic">Хроматика</button>
+        </div>
+        <div id="strings" class="strings"></div>
+        <div id="tuned-count" class="muted center"></div>
+      </div>
+      <div class="bottom-action">
+        <button id="btn-listen" class="primary big">Слушать</button>
+      </div>
+    </section>
+
+    <!-- ПЕСНИ -->
+    <section id="view-songs" class="view">
+      <header class="top">
+        <h1>Песни</h1>
+        <button id="btn-settings" class="icon-btn" aria-label="Настройки"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+      </header>
+      <div class="scroll">
+        <form id="search-form" class="search">
+          <svg viewBox="0 0 24 24" class="ic sm"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="search-input" type="search" placeholder="Исполнитель или песня" autocomplete="off" enterkeyhint="search">
+        </form>
+        <div id="songs-content"></div>
+        <label class="file-btn">
+          <input id="file-input" type="file" accept=".gp,.gp3,.gp4,.gp5,.gpx,.musicxml,.xml,.mxl,.tex" hidden>
+          Открыть файл Guitar Pro
+        </label>
+      </div>
+    </section>
+
+    <!-- ПЛЕЕР -->
+    <section id="view-player" class="view">
+      <header class="top player-top">
+        <div class="titles">
+          <div id="song-title" class="song-title">Ничего не открыто</div>
+          <div id="song-sub" class="muted small"></div>
+        </div>
+        <button id="btn-fav" class="icon-btn" aria-label="В избранное"><svg viewBox="0 0 24 24" class="ic"><path d="M12 21s-7-4.6-9.3-9.1C1.1 8.7 3 5 6.4 5c2 0 3.4 1.1 4.1 2.3h3C14.2 6.1 15.6 5 17.6 5 21 5 22.9 8.7 21.3 11.9 19 16.4 12 21 12 21z"/></svg></button>
+        <button id="btn-tracks" class="icon-btn" aria-label="Дорожки"><svg viewBox="0 0 24 24" class="ic"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" class="fill"/><circle cx="15" cy="12" r="2" class="fill"/><circle cx="8" cy="18" r="2" class="fill"/></svg></button>
+      </header>
+      <div id="viewport" class="viewport">
+        <div id="empty-player" class="empty">
+          <svg viewBox="0 0 24 24" class="ic xl"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          <p>Выберите песню во вкладке «Песни»<br>или сгенерируйте рифф</p>
+        </div>
+        <div id="at"></div>
+        <div id="loader" class="loader hidden"><div class="spin"></div><span id="loader-text">Загрузка…</span></div>
+      </div>
+      <div class="controls" id="controls">
+        <div class="seek">
+          <span id="t-cur">0:00</span>
+          <input id="seek" type="range" min="0" max="1000" value="0">
+          <span id="t-end">0:00</span>
+        </div>
+        <div class="ctrl-row">
+          <button id="btn-stop" class="icon-btn" aria-label="Стоп"><svg viewBox="0 0 24 24" class="ic"><rect x="6" y="6" width="12" height="12" rx="1.5" class="fill"/></svg></button>
+          <button id="btn-play" class="play" aria-label="Играть" disabled></button>
+          <button id="btn-loop" class="icon-btn" aria-label="Цикл"><svg viewBox="0 0 24 24" class="ic"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
+        </div>
+        <div class="chips" id="chips">
+          <div class="chipgroup" id="speed-chips">
+            <button data-v="0.4">40%</button><button data-v="0.6">60%</button><button data-v="0.8">80%</button><button data-v="1" class="on">100%</button>
+          </div>
+          <button id="chip-metro" class="chip">Метроном</button>
+          <button id="chip-count" class="chip">Отсчёт</button>
+          <button id="chip-view" class="chip">Табы</button>
+          <button id="chip-dice" class="chip hidden">🎲 Ещё</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- РИФФ -->
+    <section id="view-riff" class="view">
+      <header class="top"><h1>Рифф</h1></header>
+      <div class="scroll">
+        <div class="label">Жанр</div>
+        <div id="genres" class="genres"></div>
+
+        <div class="row-field">
+          <div><div class="label tight">Темп</div><div class="muted small" id="tempo-val">авто</div></div>
+          <input id="tempo" type="range" min="50" max="210" value="100">
+          <button id="tempo-auto" class="chip on">Авто</button>
+        </div>
+        <div class="row-field">
+          <div class="label tight">Тактов</div>
+          <div class="chipgroup" id="bars-chips"><button data-v="4" class="on">4</button><button data-v="8">8</button></div>
+        </div>
+        <div class="row-field">
+          <div class="label tight">Строй</div>
+          <button id="riff-tuning" class="pill">Как в жанре</button>
+        </div>
+        <div class="row-field">
+          <div class="label tight">Ударные</div>
+          <button id="riff-drums" class="chip on">Вкл</button>
+        </div>
+
+        <button id="btn-generate" class="primary big">Сгенерировать рифф</button>
+
+        <div class="label">Похожие песни на Songsterr</div>
+        <div id="similar"></div>
+      </div>
+    </section>
+  </main>
+
+  <nav id="tabbar">
+    <button data-view="tuner" class="on"><svg viewBox="0 0 24 24" class="ic"><path d="M3 15a9 9 0 0 1 18 0"/><path d="M12 15l4-5"/><circle cx="12" cy="15" r="1.2" class="fill"/></svg><span>Тюнер</span></button>
+    <button data-view="songs"><svg viewBox="0 0 24 24" class="ic"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>Песни</span></button>
+    <button data-view="player"><svg viewBox="0 0 24 24" class="ic"><path d="M7 4l13 8-13 8z"/></svg><span>Плеер</span></button>
+    <button data-view="riff"><svg viewBox="0 0 24 24" class="ic"><path d="M3 12h3l2-6 4 12 3-9 2 3h4"/></svg><span>Рифф</span></button>
+  </nav>
+</div>
+
+<div id="sheet-bg" class="sheet-bg hidden"></div>
+<div id="sheet" class="sheet hidden"><div class="grab"></div><h2 id="sheet-title"></h2><div id="sheet-body"></div></div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="vendor/alphatab/alphaTab.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
