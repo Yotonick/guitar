@@ -2,7 +2,11 @@ import { TUNINGS, NOTE_NAMES, getTuning, noteName, noteOctave, midiToLabel, midi
 import { PitchDetector } from './tuner.js';
 import { GENRES, generateRiff } from './riff.js';
 import { bundleToTex } from './songsterr.js';
+import { installAmpHook, setAmp, AMP, loadAmpPrefs, saveAmpPrefs } from './amp.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
+
+loadAmpPrefs();
+installAmpHook(); window.__AMP = AMP; window.__setAmp = setAmp;
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -465,13 +469,13 @@ const abs = (p) => new URL(p, location.href).href;
 
 /* --- звуки и микшер --- */
 const SOUNDFONTS = {
-  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: 'vendor/alphatab/soundfont/EGuitar_Amp.sf3' },
+  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: 'vendor/alphatab/soundfont/EGuitar_DI.sf3', amp: true },
   muse: { name: 'MuseScore General', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3' },
   gu: { name: 'GeneralUser GS', file: 'vendor/alphatab/soundfont/GeneralUser-GS.sf2' },
 };
 let overlayApplied = false;
 let sfId = 'amp';
-try { const v = localStorage.getItem('sfv2'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
+try { const v = localStorage.getItem('sfv3'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
 let mixMode = 'focus'; // focus | equal | minus
 try { const v = localStorage.getItem('mixMode'); if (['focus', 'equal', 'minus'].includes(v)) mixMode = v; } catch (e) {}
 let userVol = new Map(); // индекс дорожки -> 0..1 (ручная правка)
@@ -495,10 +499,23 @@ function applyMix() {
     api.changeTrackMute([t], mute);
   });
 }
+function isAmpTrack(t) {
+  const pr = t.playbackInfo ? t.playbackInfo.program : -1;
+  return !t.isPercussion && pr >= 28 && pr <= 31;
+}
+function updateRouting() {
+  const useAmp = !!(SOUNDFONTS[sfId].amp && AMP.installed);
+  const dist = curScore && curScore.tracks.some((t) => t.playbackInfo && (t.playbackInfo.program === 30 || t.playbackInfo.program === 31));
+  setAmp({ active: useAmp, preset: AMP.userPreset || (dist ? 'dist' : 'od') });
+}
+// Гитары → левый канал (идут через усилитель), остальное → правый. Выполняется до генерации MIDI.
+function routeScore(score) {
+  score.tracks.forEach((t) => { t.playbackInfo.balance = AMP.installed ? (isAmpTrack(t) ? 0 : 16) : 8; });
+}
 function setSoundfont(id) {
   if (!SOUNDFONTS[id] || id === sfId || !api) return;
   sfId = id;
-  try { localStorage.setItem('sfv2', id); } catch (e) {}
+  try { localStorage.setItem('sfv3', id); } catch (e) {}
   playerReady = false;
   overlayApplied = false;
   $('#btn-play').disabled = true;
@@ -551,12 +568,15 @@ function ensureApi() {
     muted = new Set();
     soloed = new Set();
     userVol = new Map();
+    routeScore(score);
     const idx = score.tracks.findIndex((t) => !t.isPercussion && t.staves[0] && t.staves[0].stringTuning.tunings.length > 0);
     const want = idx >= 0 ? idx : 0;
     renderedTrack = score.tracks[want];
     updateHeader();
     setTimeout(() => {
+      if (api.score !== score) return;
       if (api.tracks.length !== 1 || api.tracks[0] !== score.tracks[want]) api.renderTracks([score.tracks[want]]);
+      updateRouting();
       applyMix();
     }, 0);
   });
@@ -571,6 +591,7 @@ function ensureApi() {
     }
     playerReady = true;
     $('#btn-play').disabled = false;
+    updateRouting();
     applyMix();
     toast('Звуки готовы — можно играть', 1800);
   });
@@ -785,6 +806,30 @@ $('#btn-tracks').onclick = () => {
       });
     }
     drawRows();
+
+    if (SOUNDFONTS[sfId].amp && AMP.installed) {
+      const ah = document.createElement('div');
+      ah.className = 'mixhint'; ah.style.marginTop = '14px'; ah.textContent = 'Гитарный усилитель';
+      const types = document.createElement('div'); types.className = 'chips';
+      const cur = AMP.preset;
+      [['dist', 'Дисторшн'], ['od', 'Овердрайв'], ['clean', 'Чистый']].forEach(([id, label]) => {
+        const b = document.createElement('button');
+        b.className = 'chip' + (cur === id ? ' on' : ''); b.textContent = label;
+        b.onclick = () => { AMP.userPreset = id; setAmp({ preset: id }); saveAmpPrefs(); $$('.chip', types).forEach((x) => x.classList.toggle('on', x === b)); };
+        types.append(b);
+      });
+      body.append(ah, types);
+      const knob = (label, key, min, max, step, toVal, fromVal) => {
+        const r = document.createElement('div'); r.className = 'stepper';
+        r.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${fromVal(AMP[key])}" style="width:55%">`;
+        $('input', r).oninput = (e) => { setAmp({ [key]: toVal(Number(e.target.value)) }); saveAmpPrefs(); };
+        body.append(r);
+      };
+      knob('Драйв', 'drive', 0, 100, 1, (v) => v / 100, (v) => Math.round(v * 100));
+      knob('Низ', 'low', -6, 6, 0.5, (v) => v, (v) => v);
+      knob('Середина', 'mid', -6, 6, 0.5, (v) => v, (v) => v);
+      knob('Верх', 'high', -6, 6, 0.5, (v) => v, (v) => v);
+    }
 
     const sfh = document.createElement('div');
     sfh.className = 'mixhint';
