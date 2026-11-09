@@ -32,23 +32,36 @@ function gateCurve(th) {
 
 const GATE_SRC = `
 class Gate extends AudioWorkletProcessor {
-  constructor(){ super(); this.env=0; this.g=0; this.hold=0; }
+  constructor(){ super(); this.env=0; this.g=0; this.hold=0;
+    this.fast=0; this.slow=0; this.wait=0; this.lp=0; this.hg=1; this.hgT=1; this.br=0; this.brT=0; }
   process(inputs, outputs){
     const i=inputs[0][0], o=outputs[0][0]; if(!i||!o) return true;
     // мягкий гейт: открывается от тихого щипка, закрывается только когда звук почти угас,
     // держит 80 мс и гасит хвост плавно — ноты не обрываются «рывками»
     const open=0.0025, close=0.0008, rel=Math.exp(-1/(sampleRate*0.06)), att=Math.exp(-1/(sampleRate*0.001));
-    let env=this.env, g=this.g, hold=this.hold;
+    // «живая рука»: на каждом новом щипке чуть меняем громкость (±1 дБ) и яркость атаки,
+    // чтобы повторы одной ноты (чаги) не звучали как копия — как у гитариста с медиатором
+    const fA=Math.exp(-1/(sampleRate*0.0005)), fR=Math.exp(-1/(sampleRate*0.008)), sC=Math.exp(-1/(sampleRate*0.04));
+    const lpC=1-Math.exp(-2*Math.PI*2500/sampleRate), sm=1-Math.exp(-1/(sampleRate*0.002)), gap=Math.floor(sampleRate*0.035);
+    let env=this.env, g=this.g, hold=this.hold, fast=this.fast, slow=this.slow, wait=this.wait, lp=this.lp;
+    let hg=this.hg, hgT=this.hgT, br=this.br, brT=this.brT;
     for(let k=0;k<i.length;k++){
-      const a=Math.abs(i[k]);
+      const x=i[k], a=Math.abs(x);
       env = a>env ? att*env+(1-att)*a : rel*env+(1-rel)*a;
       if(env>open) hold=Math.floor(sampleRate*0.08);
       else if(hold>0) hold--;
       const target = (env>close||hold>0)?1:0;
       g += (target-g)*(target>g?0.02:0.0004);
-      o[k]=i[k]*g;
+      fast = a>fast ? fA*fast+(1-fA)*a : fR*fast+(1-fR)*a;
+      slow = sC*slow+(1-sC)*a;
+      if(wait>0) wait--;
+      else if(fast>0.002 && fast>slow*1.7){ hgT=0.88+Math.random()*0.24; brT=Math.random()*0.4; wait=gap; }
+      hg += (hgT-hg)*sm; br += (brT-br)*sm;
+      lp += lpC*(x-lp);
+      o[k]=(x*(1-br)+lp*br)*hg*g;
     }
-    this.env=env; this.g=g; this.hold=hold; return true;
+    this.env=env; this.g=g; this.hold=hold; this.fast=fast; this.slow=slow; this.wait=wait; this.lp=lp;
+    this.hg=hg; this.hgT=hgT; this.br=br; this.brT=brT; return true;
   }
 }
 registerProcessor('guitar-gate', Gate);`;
