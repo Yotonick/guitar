@@ -462,6 +462,46 @@ let lastRiff = null;
 let pick = { active: false, first: null };
 
 const abs = (p) => new URL(p, location.href).href;
+
+/* --- звуки и микшер --- */
+const SOUNDFONTS = {
+  muse: { name: 'MuseScore General', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3' },
+  gu: { name: 'GeneralUser GS', file: 'vendor/alphatab/soundfont/GeneralUser-GS.sf2' },
+};
+let sfId = 'muse';
+try { const v = localStorage.getItem('sf'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
+let mixMode = 'focus'; // focus | equal | minus
+try { const v = localStorage.getItem('mixMode'); if (['focus', 'equal', 'minus'].includes(v)) mixMode = v; } catch (e) {}
+let userVol = new Map(); // индекс дорожки -> 0..1 (ручная правка)
+
+function autoVol(t, shownT) {
+  if (mixMode === 'equal') return 1;
+  if (t === shownT) return 1;
+  if (t.isPercussion) return 0.7;
+  const tun = t.staves[0] && t.staves[0].stringTuning.tunings.length;
+  const bass = tun && tun <= 4 && t.staves[0].stringTuning.tunings.some((x) => x < 45);
+  if (bass) return 0.75;
+  return tun ? 0.3 : 0.3;
+}
+function applyMix() {
+  if (!api || !curScore) return;
+  const shownT = renderedTrack;
+  curScore.tracks.forEach((t, i) => {
+    const v = userVol.has(i) ? userVol.get(i) : autoVol(t, shownT);
+    api.changeTrackVolume([t], v);
+    const mute = muted.has(i) || (mixMode === 'minus' && t === shownT);
+    api.changeTrackMute([t], mute);
+  });
+}
+function setSoundfont(id) {
+  if (!SOUNDFONTS[id] || id === sfId || !api) return;
+  sfId = id;
+  try { localStorage.setItem('sf', id); } catch (e) {}
+  playerReady = false;
+  $('#btn-play').disabled = true;
+  toast('Загружаю звук: ' + SOUNDFONTS[id].name + '…', 4000);
+  api.loadSoundFont(abs(SOUNDFONTS[id].file), false);
+}
 const PLAY_SVG = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const PAUSE_SVG = '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
 $('#btn-play').innerHTML = PLAY_SVG;
@@ -496,7 +536,7 @@ function ensureApi() {
       enablePlayer: true,
       enableCursor: true,
       enableAnimatedBeatCursor: true,
-      soundFont: abs('vendor/alphatab/soundfont/GeneralUser-GS.sf2'),
+      soundFont: abs(SOUNDFONTS[sfId].file),
       scrollElement: $('#viewport'),
       scrollOffsetY: -40,
     },
@@ -507,12 +547,14 @@ function ensureApi() {
     curScore = score;
     muted = new Set();
     soloed = new Set();
+    userVol = new Map();
     const idx = score.tracks.findIndex((t) => !t.isPercussion && t.staves[0] && t.staves[0].stringTuning.tunings.length > 0);
     const want = idx >= 0 ? idx : 0;
     renderedTrack = score.tracks[want];
     updateHeader();
     setTimeout(() => {
       if (api.tracks.length !== 1 || api.tracks[0] !== score.tracks[want]) api.renderTracks([score.tracks[want]]);
+      applyMix();
     }, 0);
   });
   api.renderFinished.on(() => hideLoader());
@@ -522,6 +564,7 @@ function ensureApi() {
   api.playerReady.on(() => {
     playerReady = true;
     $('#btn-play').disabled = false;
+    applyMix();
     toast('Звуки готовы — можно играть', 1800);
   });
   api.playerStateChanged.on((e) => { $('#btn-play').innerHTML = e.state === 1 ? PAUSE_SVG : PLAY_SVG; });
@@ -661,35 +704,95 @@ $('#btn-loop').onclick = () => {
 
 $('#btn-tracks').onclick = () => {
   if (!api || !curScore) return toast('Сначала откройте песню');
-  openSheet('Дорожки', (body) => {
+  openSheet('Дорожки и звук', (body) => {
+    const modes = document.createElement('div');
+    modes.className = 'chips';
+    const MODES = [['focus', 'Фокус'], ['equal', 'Поровну'], ['minus', 'Минус-один']];
+    const hint = document.createElement('div');
+    hint.className = 'mixhint';
+    const HINTS = {
+      focus: 'Дорожка на экране звучит громко, остальные тише — слышно, что именно ты играешь.',
+      equal: 'Все дорожки на одной громкости.',
+      minus: 'Дорожка на экране не играет — играй её сам под остальных.',
+    };
+    const redraw = () => {
+      body.querySelectorAll('.mixrow').forEach((r) => r.remove());
+      drawRows();
+    };
+    MODES.forEach(([id, label]) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (mixMode === id ? ' on' : '');
+      b.textContent = label;
+      b.onclick = () => {
+        mixMode = id;
+        try { localStorage.setItem('mixMode', id); } catch (e) {}
+        userVol = new Map();
+        $$('.chip', modes).forEach((x) => x.classList.toggle('on', x === b));
+        hint.textContent = HINTS[id];
+        applyMix();
+        redraw();
+      };
+      modes.append(b);
+    });
+    hint.textContent = HINTS[mixMode];
+    body.append(modes, hint);
+
     const vol = document.createElement('div');
     vol.className = 'stepper';
-    vol.innerHTML = `<span>Громкость</span><input type="range" min="0" max="100" value="${Math.round(api.masterVolume * 100)}" style="width:55%">`;
+    vol.innerHTML = `<span>Общая громкость</span><input type="range" min="0" max="100" value="${Math.round(api.masterVolume * 100)}" style="width:50%">`;
     $('input', vol).oninput = (e) => (api.masterVolume = e.target.value / 100);
     body.append(vol);
-    curScore.tracks.forEach((t, i) => {
-      const row = document.createElement('div');
-      row.className = 'trk';
-      const shown = api.tracks.includes(t);
-      row.innerHTML = `<div class="n"><div>${esc(t.name || 'Дорожка ' + (i + 1))}</div><small>${t.isPercussion ? 'ударные' : esc(t.shortName || '')}${shown ? ' · на экране' : ''}</small></div>`;
-      if (!t.isPercussion) {
-        const show = document.createElement('button');
-        show.className = 'mini' + (shown ? ' on' : '');
-        show.textContent = '👁';
-        show.onclick = () => { renderedTrack = t; api.renderTracks([t]); updateHeader(); closeSheet(); };
-        row.append(show);
-      }
-      const m = document.createElement('button');
-      m.className = 'mini' + (muted.has(i) ? ' on' : '');
-      m.textContent = 'M';
-      m.onclick = () => { const on = !muted.has(i); on ? muted.add(i) : muted.delete(i); api.changeTrackMute([t], on); m.classList.toggle('on', on); };
-      const s = document.createElement('button');
-      s.className = 'mini' + (soloed.has(i) ? ' on' : '');
-      s.textContent = 'S';
-      s.onclick = () => { const on = !soloed.has(i); on ? soloed.add(i) : soloed.delete(i); api.changeTrackSolo([t], on); s.classList.toggle('on', on); };
-      row.append(m, s);
-      body.append(row);
+
+    function drawRows() {
+      curScore.tracks.forEach((t, i) => {
+        const row = document.createElement('div');
+        row.className = 'trk mixrow';
+        row.style.flexWrap = 'wrap';
+        const shown = api.tracks.includes(t);
+        const kind = t.isPercussion ? 'ударные' : (t.staves[0] && t.staves[0].stringTuning.tunings.length ? 'струнные' : 'другое');
+        row.innerHTML = `<div class="n"><div>${shown ? '▶ ' : ''}${esc(t.name || 'Дорожка ' + (i + 1))}</div><small>${kind}${shown ? ' · на экране' : ''}${mixMode === 'minus' && shown ? ' · не играет' : ''}</small></div>`;
+        if (!t.isPercussion) {
+          const show = document.createElement('button');
+          show.className = 'mini' + (shown ? ' on' : '');
+          show.textContent = '👁';
+          show.title = 'Показать табы этой дорожки';
+          show.onclick = () => { renderedTrack = t; userVol = new Map(); api.renderTracks([t]); updateHeader(); applyMix(); redraw(); };
+          row.append(show);
+        }
+        const m = document.createElement('button');
+        m.className = 'mini' + (muted.has(i) ? ' on' : '');
+        m.textContent = 'M';
+        m.onclick = () => { const on = !muted.has(i); on ? muted.add(i) : muted.delete(i); applyMix(); m.classList.toggle('on', on); };
+        const s = document.createElement('button');
+        s.className = 'mini' + (soloed.has(i) ? ' on' : '');
+        s.textContent = 'S';
+        s.onclick = () => { const on = !soloed.has(i); on ? soloed.add(i) : soloed.delete(i); api.changeTrackSolo([t], on); s.classList.toggle('on', on); };
+        row.append(m, s);
+        const cur = userVol.has(i) ? userVol.get(i) : autoVol(t, renderedTrack);
+        const sl = document.createElement('input');
+        sl.type = 'range'; sl.min = 0; sl.max = 100; sl.value = Math.round(cur * 100);
+        sl.style.cssText = 'width:100%;flex-basis:100%;margin-top:6px';
+        sl.oninput = () => { userVol.set(i, sl.value / 100); api.changeTrackVolume([t], sl.value / 100); };
+        row.append(sl);
+        body.append(row);
+      });
+    }
+    drawRows();
+
+    const sfh = document.createElement('div');
+    sfh.className = 'mixhint';
+    sfh.style.marginTop = '14px';
+    sfh.textContent = 'Звуки инструментов';
+    const sfs = document.createElement('div');
+    sfs.className = 'chips';
+    Object.entries(SOUNDFONTS).forEach(([id, f]) => {
+      const b = document.createElement('button');
+      b.className = 'chip' + (sfId === id ? ' on' : '');
+      b.textContent = f.name;
+      b.onclick = () => { $$('.chip', sfs).forEach((x) => x.classList.toggle('on', x === b)); setSoundfont(id); };
+      sfs.append(b);
     });
+    body.append(sfh, sfs);
   });
 };
 
