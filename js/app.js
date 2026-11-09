@@ -519,11 +519,12 @@ document.addEventListener('input', (e) => { if (e.target.matches && e.target.mat
 
 /* --- звуки и микшер --- */
 const SOUNDFONTS = {
-  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: 'vendor/alphatab/soundfont/EGuitar_DI.sf3', amp: true },
+  // живой Fender (сырой — в усилитель, чистый — запечённый) + живые барабаны MuldjordKit поверх MuseScore
+  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: ['vendor/alphatab/soundfont/EGuitar_Live.sf3', 'vendor/alphatab/soundfont/Drums_Live.sf3'], amp: true },
   muse: { name: 'MuseScore General', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3' },
   gu: { name: 'GeneralUser GS', file: 'vendor/alphatab/soundfont/GeneralUser-GS.sf2' },
 };
-let overlayApplied = false;
+let overlayApplied = 0; // сколько дополнительных наборов уже подгружено
 let sfId = 'amp';
 try { const v = localStorage.getItem('sfv3'); if (v && SOUNDFONTS[v]) sfId = v; } catch (e) {}
 let mixMode = 'focus'; // focus | equal | minus
@@ -562,7 +563,7 @@ function setSoundfont(id) {
   sfId = id;
   try { localStorage.setItem('sfv3', id); } catch (e) {}
   playerReady = false;
-  overlayApplied = false;
+  overlayApplied = 0;
   $('#btn-play').disabled = true;
   toast('Загружаю звук: ' + SOUNDFONTS[id].name + '…', 4000);
   api.loadSoundFont(abs(SOUNDFONTS[id].file), false);
@@ -630,10 +631,10 @@ function ensureApi() {
     if (!playerReady && e.total && e.loaded === 0) toast('Загружаю звуки гитары…');
   });
   api.playerReady.on(() => {
-    if (SOUNDFONTS[sfId].overlay && !overlayApplied) {
-      overlayApplied = true;
-      api.loadSoundFont(abs(SOUNDFONTS[sfId].overlay), true);
-    }
+    // дополнительные наборы (живая гитара, живые барабаны) — добавляем поверх основного, каждый один раз;
+    // у них разные инструменты, поэтому порядок загрузки неважен
+    const ov = [].concat(SOUNDFONTS[sfId].overlay || []);
+    while (overlayApplied < ov.length) api.loadSoundFont(abs(ov[overlayApplied++]), true);
     playerReady = true;
     $('#btn-play').disabled = false;
     updateRouting();

@@ -79,6 +79,7 @@ function noteFx(note, beat) {
   if (note.hp) fx.push('h');
   if (note.slide) fx.push('sl');
   if (note.leftHandVibrato || note.vibrato) fx.push('v');
+  if (note.accentuated) fx.push(note.accentuated === 2 ? 'hac' : 'ac'); // акцент → громкий слой сэмплов
   return fx.length ? `{${fx.join(' ')}}` : '';
 }
 
@@ -97,7 +98,8 @@ function beatToTex(beat, kind, numStrings) {
       const m = gmDrum(n.fret);
       if (m && !used.has(m)) {
         used.add(m);
-        toks.push(String(m) + (n.ghost ? '{g}' : ''));
+        const dfx = [n.ghost ? 'g' : '', n.accentuated ? (n.accentuated === 2 ? 'hac' : 'ac') : ''].filter(Boolean);
+        toks.push(String(m) + (dfx.length ? `{${dfx.join(' ')}}` : ''));
       }
     } else {
       const str = Number(n.string) + 1; // у Songsterr 0 = высшая струна, в alphaTex 1 = высшая

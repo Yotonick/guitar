@@ -1,0 +1,7 @@
+Drums_Live.sf3 — собран из MuldjordKit (FreePats version 2020-10-18).
+
+Original MuldjordKit by Lars Muldjord (www.muldjord.com, www.drumgizmo.org).
+FreePats version assembled by roberto@zenvoid.org: https://freepats.zenvoid.org/Percussion/acoustic-drum-kit.html
+License: Creative Commons Attribution 4.0 International — http://creativecommons.org/licenses/by/4.0/
+
+Changes: selected velocity layers, mixed to mono, trimmed and faded, encoded as Ogg Vorbis inside SoundFont (GM drum map).

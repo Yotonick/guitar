@@ -35,15 +35,17 @@ class Gate extends AudioWorkletProcessor {
   constructor(){ super(); this.env=0; this.g=0; this.hold=0; }
   process(inputs, outputs){
     const i=inputs[0][0], o=outputs[0][0]; if(!i||!o) return true;
-    const open=0.004, close=0.0025, rel=Math.exp(-1/(sampleRate*0.03)), att=Math.exp(-1/(sampleRate*0.001));
+    // мягкий гейт: открывается от тихого щипка, закрывается только когда звук почти угас,
+    // держит 80 мс и гасит хвост плавно — ноты не обрываются «рывками»
+    const open=0.0025, close=0.0008, rel=Math.exp(-1/(sampleRate*0.06)), att=Math.exp(-1/(sampleRate*0.001));
     let env=this.env, g=this.g, hold=this.hold;
     for(let k=0;k<i.length;k++){
       const a=Math.abs(i[k]);
       env = a>env ? att*env+(1-att)*a : rel*env+(1-rel)*a;
-      if(env>open) hold=Math.floor(sampleRate*0.015);
+      if(env>open) hold=Math.floor(sampleRate*0.08);
       else if(hold>0) hold--;
       const target = (env>close||hold>0)?1:0;
-      g += (target-g)*(target>g?0.01:0.0025);
+      g += (target-g)*(target>g?0.02:0.0004);
       o[k]=i[k]*g;
     }
     this.env=env; this.g=g; this.hold=hold; return true;
