@@ -5,7 +5,6 @@ import { bundleToTex } from './songsterr.js';
 import { installAmpHook, setAmp, AMP, loadAmpPrefs, saveAmpPrefs } from './amp.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
 
-loadAmpPrefs();
 installAmpHook(); window.__AMP = AMP; window.__setAmp = setAmp;
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -22,8 +21,8 @@ if (tg) {
   try {
     tg.ready();
     tg.expand();
-    tg.setHeaderColor && tg.setHeaderColor('#000000');
-    tg.setBackgroundColor && tg.setBackgroundColor('#000000');
+    tg.setHeaderColor && tg.setHeaderColor('#1b1613');
+    tg.setBackgroundColor && tg.setBackgroundColor('#1b1613');
     tg.disableVerticalSwipes && tg.disableVerticalSwipes();
   } catch {}
 }
@@ -88,6 +87,7 @@ const tuner = {
   tuningId: saved.tuningId || 'std',
   custom: saved.custom || [40, 45, 50, 55, 59, 64],
   a4: saved.a4 || 440,
+  gauge: saved.gauge === 'arc' ? 'arc' : 'line',
   mode: 'strings',
   locked: null,
   tuned: new Set(),
@@ -98,7 +98,7 @@ const tuner = {
   angle: 0,
   targetAngle: 0,
 };
-const saveTuner = () => store.set('tuner', { tuningId: tuner.tuningId, custom: tuner.custom, a4: tuner.a4 });
+const saveTuner = () => store.set('tuner', { tuningId: tuner.tuningId, custom: tuner.custom, a4: tuner.a4, gauge: tuner.gauge });
 const tunerNotes = () => (tuner.tuningId === 'custom' ? tuner.custom : getTuning(tuner.tuningId).notes);
 
 // Шкала
@@ -123,7 +123,33 @@ const tunerNotes = () => (tuner.tuningId === 'custom' ? tuner.custom : getTuning
   const labels = $$('#gauge .g-label');
   labels[0].setAttribute('x', 38); labels[0].setAttribute('y', 118);
   labels[1].setAttribute('x', 262); labels[1].setAttribute('y', 118);
+  const gl = $('#gl-ticks');
+  for (let c = -50; c <= 50; c += 5) {
+    const x = 160 + c * 2.6, mid = c === 0, big = c % 10 === 0;
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l.setAttribute('x1', x); l.setAttribute('x2', x);
+    l.setAttribute('y1', mid ? 10 : big ? 18 : 23); l.setAttribute('y2', mid ? 46 : big ? 38 : 33);
+    l.setAttribute('class', 'gl-tick' + (mid ? ' mid' : ''));
+    gl.append(l);
+  }
 })();
+const GAUGE_ICONS = {
+  arc: '<svg viewBox="0 0 24 24" class="ic"><path d="M4 16a8 8 0 0 1 16 0"/><path d="M12 16l3-4"/></svg>',
+  line: '<svg viewBox="0 0 24 24" class="ic"><path d="M3 12h18"/><path d="M6 9v6M18 9v6M12 6v12"/></svg>',
+};
+function applyGaugeStyle() {
+  const st = tuner.gauge;
+  $('.gauge-wrap').dataset.style = st;
+  // на кнопке показываем другой вариант — тот, на который переключит нажатие
+  $('#btn-gauge').innerHTML = GAUGE_ICONS[st === 'arc' ? 'line' : 'arc'];
+  $('#btn-gauge').title = st === 'arc' ? 'Показать линейку' : 'Показать дугу';
+}
+$('#btn-gauge').onclick = () => { tuner.gauge = tuner.gauge === 'arc' ? 'line' : 'arc'; saveTuner(); applyGaugeStyle(); };
+function setNeedleLive(on) { $('#needle').classList.toggle('live', on); $('#gl-marker').classList.toggle('live', on); }
+function drawNeedle() {
+  $('#needle').setAttribute('transform', `rotate(${tuner.angle.toFixed(2)} 150 150)`);
+  $('#gl-marker').setAttribute('transform', `translate(${((tuner.angle / 1.2) * 2.6).toFixed(2)} 0)`);
+}
 
 function renderStrings() {
   const notes = tunerNotes();
@@ -136,11 +162,13 @@ function renderStrings() {
     const b = document.createElement('button');
     b.className = 'str' + (tuner.locked === i ? ' locked' : '') + (tuner.tuned.has(i) ? ' done' : '');
     b.dataset.i = i;
-    b.innerHTML = `<b>${noteName(m)}</b><small>${notes.length - i}</small>`;
+    b.style.setProperty('--w', (1.3 + (notes.length - 1 - i) * 0.55).toFixed(2) + 'px');
+    b.setAttribute('aria-label', `${notes.length - i}-я струна, ${midiToLabel(m)}`);
+    b.innerHTML = `<i class="wire"></i><b>${noteName(m)}</b><small>${notes.length - i}</small>`;
     b.onclick = () => {
       tuner.locked = tuner.locked === i ? null : i;
       renderStrings();
-      if (tuner.locked != null) toast(`Строю только ${notes.length - i}-ю струну (${midiToLabel(m)}). Нажми ещё раз, чтобы снять`);
+      if (tuner.locked != null) toast(`Ловлю только ${notes.length - i}-ю струну (${midiToLabel(m)}). Нажми ещё раз, чтобы снять`);
     };
     box.append(b);
   });
@@ -245,6 +273,7 @@ $('#note-hz').addEventListener('click', () =>
 
 const median = (arr) => [...arr].sort((a, b) => a - b)[Math.floor(arr.length / 2)];
 const gaugeWrap = $('.gauge-wrap');
+applyGaugeStyle();
 
 function onPitch(freq, clarity) {
   if (clarity < 0.8) return onSilence();
@@ -271,9 +300,9 @@ function onPitch(freq, clarity) {
   const cents = (midi - tMidi) * 100;
   const inTune = Math.abs(cents) <= 5;
   tuner.targetAngle = Math.max(-50, Math.min(50, cents)) * 1.2;
-  $('#needle').classList.add('live');
+  setNeedleLive(true);
   gaugeWrap.classList.toggle('in-tune', inTune);
-  $('#note-big').textContent = noteName(tMidi) + noteOctave(tMidi);
+  $('#note-big').textContent = noteName(tMidi) + noteOctave(tMidi); $('#note-big').classList.remove('idle');
   $('#note-hz').textContent = `${f.toFixed(1)} Гц · ${cents >= 0 ? '+' : ''}${Math.round(cents)} цент`;
   const hint = $('#note-hint');
   hint.className = 'hint ' + (inTune ? '' : cents < 0 ? 'up' : 'down');
@@ -292,12 +321,12 @@ function onSilence() {
   if (performance.now() - tuner.lastSignal > 1000) {
     tuner.targetAngle = 0;
     tuner.hist = [];
-    $('#needle').classList.remove('live');
+    setNeedleLive(false);
     gaugeWrap.classList.remove('in-tune');
     $('#note-hint').textContent = ' ';
     $('#note-hint').className = 'hint';
-    $('#note-big').textContent = '–';
-    $('#note-hz').textContent = 'Сыграйте струну';
+    $('#note-big').textContent = '—'; $('#note-big').classList.add('idle');
+    $('#note-hz').textContent = 'Сыграй открытую струну';
     setLiveActive(-1);
   }
 }
@@ -308,7 +337,7 @@ let rafOn = false;
 function animateNeedle() {
   if (!tuner.listening) { rafOn = false; return; }
   tuner.angle += (tuner.targetAngle - tuner.angle) * 0.22;
-  $('#needle').setAttribute('transform', `rotate(${tuner.angle.toFixed(2)} 150 150)`);
+  drawNeedle();
   requestAnimationFrame(animateNeedle);
 }
 
@@ -340,11 +369,11 @@ function stopListening() {
   b.classList.remove('on');
   tuner.targetAngle = 0;
   tuner.hist = [];
-  $('#needle').setAttribute('transform', 'rotate(0 150 150)');
-  $('#needle').classList.remove('live');
+  tuner.angle = 0; drawNeedle();
+  setNeedleLive(false);
   gaugeWrap.classList.remove('in-tune');
-  $('#note-big').textContent = '–';
-  $('#note-hz').textContent = 'Сыграйте струну';
+  $('#note-big').textContent = '—'; $('#note-big').classList.add('idle');
+  $('#note-hz').textContent = 'Сыграй открытую струну';
   $('#note-hint').textContent = ' ';
   setLiveActive(-1);
 }
@@ -356,7 +385,8 @@ renderStrings();
 function songRow(song, extra) {
   const b = document.createElement('button');
   b.className = 'song';
-  b.innerHTML = `<div class="meta"><div class="t">${esc(song.title)}</div><div class="a">${esc(song.artist || '')}${extra ? ' · ' + esc(extra) : ''}</div></div><span class="go">›</span>`;
+  const letter = (song.artist || song.title || '?').trim().charAt(0).toUpperCase();
+  b.innerHTML = `<span class="mono">${esc(letter)}</span><div class="meta"><div class="t">${esc(song.title)}</div><div class="a">${esc(song.artist || '')}${extra ? ' · ' + esc(extra) : ''}</div></div><span class="go">›</span>`;
   b.onclick = () => openSong(song);
   return b;
 }
@@ -364,7 +394,7 @@ function songRow(song, extra) {
 function noApiBox() {
   const d = document.createElement('div');
   d.className = 'note-box';
-  d.innerHTML = `<b>Поиск Songsterr ещё не подключён.</b><br>Нужен адрес вашего воркера Cloudflare (см. README). Вставьте его в настройках — шестерёнка сверху. Пока можно открыть свой файл Guitar Pro или сгенерировать рифф.`;
+  d.innerHTML = `<b>Поиск Songsterr не подключён.</b><br>Вставь адрес своего воркера Cloudflare — инструкция в README. А пока можно открыть свой файл Guitar Pro или сгенерировать рифф.`;
   const btn = document.createElement('button');
   btn.className = 'primary';
   btn.style.marginTop = '12px';
@@ -385,14 +415,27 @@ function section(title, list) {
   return frag;
 }
 
+let songsTab = 'fav';
 function renderSongs() {
   if ($('#search-input').value.trim()) return;
+  $('#songs-seg').classList.remove('hidden');
   const box = $('#songs-content');
   box.innerHTML = '';
   if (!getApiBase()) box.append(noApiBox());
-  box.append(section('Избранное', favorites.list()));
-  box.append(section('Недавние', history.list().slice(0, 15)));
+  const list = songsTab === 'fav' ? favorites.list() : history.list().slice(0, 30);
+  if (!list.length) {
+    const e = document.createElement('div');
+    e.className = 'empty-list';
+    e.textContent = songsTab === 'fav' ? 'Здесь будут песни с сердечком. Нажми ♥ в плеере, чтобы добавить.' : 'Здесь появятся песни, которые ты открывал.';
+    box.append(e);
+  }
+  list.forEach((s) => box.append(songRow(s)));
 }
+$$('#songs-seg button').forEach((b) => b.addEventListener('click', () => {
+  songsTab = b.dataset.tab;
+  $$('#songs-seg button').forEach((x) => x.classList.toggle('on', x === b));
+  renderSongs();
+}));
 
 $('#search-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -401,6 +444,7 @@ $('#search-form').addEventListener('submit', async (e) => {
   const box = $('#songs-content');
   if (!q) return renderSongs();
   if (!getApiBase()) { box.innerHTML = ''; box.append(noApiBox()); return; }
+  $('#songs-seg').classList.add('hidden');
   box.innerHTML = '<div class="spinner-line">Ищу…</div>';
   try {
     const res = await searchSongs(q);
@@ -415,7 +459,7 @@ $('#search-input').addEventListener('input', (e) => { if (!e.target.value) rende
 
 function openSettings() {
   openSheet('Настройки', (body) => {
-    body.innerHTML = `<div class="label" style="margin-top:0">Адрес воркера Cloudflare</div>
+    body.innerHTML = `<div class="label" style="margin-top:0">Адрес воркера Cloudflare — через него идёт поиск Songsterr</div>
       <input id="api-input" class="field" type="url" inputmode="url" placeholder="https://guitar-proxy.xxx.workers.dev" value="${esc(getApiBase())}">
       <button class="primary" id="api-save">Сохранить</button>
       <button class="ghost" id="hist-clear">Очистить недавние</button>`;
@@ -466,6 +510,11 @@ let lastRiff = null;
 let pick = { active: false, first: null };
 
 const abs = (p) => new URL(p, location.href).href;
+function paintRange(el) {
+  const p = ((el.value - el.min) / (el.max - el.min)) * 100;
+  el.style.setProperty('--p', p + '%');
+}
+document.addEventListener('input', (e) => { if (e.target.matches && e.target.matches('input.filled')) paintRange(e.target); });
 
 /* --- звуки и микшер --- */
 const SOUNDFONTS = {
@@ -503,11 +552,6 @@ function isAmpTrack(t) {
   const pr = t.playbackInfo ? t.playbackInfo.program : -1;
   return !t.isPercussion && pr >= 28 && pr <= 31;
 }
-function updateRouting() {
-  const useAmp = !!(SOUNDFONTS[sfId].amp && AMP.installed);
-  const dist = curScore && curScore.tracks.some((t) => t.playbackInfo && (t.playbackInfo.program === 30 || t.playbackInfo.program === 31));
-  setAmp({ active: useAmp, preset: AMP.userPreset || (dist ? 'dist' : 'od') });
-}
 // Гитары → левый канал (идут через усилитель), остальное → правый. Выполняется до генерации MIDI.
 function routeScore(score) {
   score.tracks.forEach((t) => { t.playbackInfo.balance = AMP.installed ? (isAmpTrack(t) ? 0 : 16) : 8; });
@@ -544,12 +588,12 @@ function ensureApi() {
       staveProfile: A.StaveProfile.Tab,
       scale: 0.9,
       resources: {
-        staffLineColor: 'rgba(255,255,255,0.35)',
-        barSeparatorColor: 'rgba(255,255,255,0.5)',
-        mainGlyphColor: '#f2f2f2',
-        secondaryGlyphColor: 'rgba(255,255,255,0.45)',
-        scoreInfoColor: '#cfcfcf',
-        barNumberColor: 'rgba(217,178,124,0.9)',
+        staffLineColor: 'rgba(239,230,216,0.28)',
+        barSeparatorColor: 'rgba(239,230,216,0.45)',
+        mainGlyphColor: '#efe6d8',
+        secondaryGlyphColor: 'rgba(239,230,216,0.45)',
+        scoreInfoColor: '#a39686',
+        barNumberColor: 'rgba(240,163,58,0.85)',
       },
     },
     player: {
@@ -600,7 +644,7 @@ function ensureApi() {
     totalMs = e.endTime;
     $('#t-cur').textContent = fmtTime(e.currentTime);
     $('#t-end').textContent = fmtTime(e.endTime);
-    if (!seeking && e.endTime) $('#seek').value = Math.round((e.currentTime / e.endTime) * 1000);
+    if (!seeking && e.endTime) { $('#seek').value = Math.round((e.currentTime / e.endTime) * 1000); paintRange($('#seek')); }
   });
   api.beatMouseUp.on((beat) => { if (beat && pick.active) onPickBar(beat); });
   return api;
@@ -664,6 +708,7 @@ const seekEl = $('#seek');
 ['pointerdown', 'touchstart'].forEach((ev) => seekEl.addEventListener(ev, () => (seeking = true), { passive: true }));
 ['pointerup', 'touchend', 'change'].forEach((ev) => seekEl.addEventListener(ev, () => (seeking = false)));
 seekEl.addEventListener('input', () => {
+  paintRange(seekEl);
   if (!api || !totalMs) return;
   api.timePosition = (seekEl.value / 1000) * totalMs;
   $('#t-cur').textContent = fmtTime((seekEl.value / 1000) * totalMs);
@@ -730,121 +775,184 @@ $('#btn-loop').onclick = () => {
   }
 };
 
+/* ---------- Шторка «Дорожки» ---------- */
+const EYE = '<svg viewBox="0 0 24 24" class="ic"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/></svg>';
+function trackKind(t) {
+  if (t.isPercussion) return 'ударные';
+  const tun = t.staves[0] && t.staves[0].stringTuning.tunings;
+  if (!tun || !tun.length) return 'другой инструмент';
+  if (tun.length <= 5 && Math.min(...tun) < 40) return 'бас';
+  const pr = t.playbackInfo.program;
+  if (pr === 30 || pr === 31) return 'гитара, дисторшн';
+  if (pr === 29) return 'гитара, овердрайв';
+  if (pr === 28) return 'гитара, глушёная';
+  if (pr === 24 || pr === 25) return 'акустика';
+  return 'гитара, чистый';
+}
 $('#btn-tracks').onclick = () => {
-  if (!api || !curScore) return toast('Сначала откройте песню');
-  openSheet('Дорожки и звук', (body) => {
-    const modes = document.createElement('div');
-    modes.className = 'chips';
+  if (!api || !curScore) return toast('Сначала открой песню');
+  openSheet('Дорожки', (body) => {
+    const seg = document.createElement('div');
+    seg.className = 'seg';
     const MODES = [['focus', 'Фокус'], ['equal', 'Поровну'], ['minus', 'Минус-один']];
+    const HINTS = {
+      focus: 'Дорожка на экране громче остальных, чтобы было слышно, что ты разбираешь.',
+      equal: 'Все дорожки на одной громкости.',
+      minus: 'Дорожка на экране молчит — играй её сам под остальных.',
+    };
     const hint = document.createElement('div');
     hint.className = 'mixhint';
-    const HINTS = {
-      focus: 'Дорожка на экране звучит громко, остальные тише — слышно, что именно ты играешь.',
-      equal: 'Все дорожки на одной громкости.',
-      minus: 'Дорожка на экране не играет — играй её сам под остальных.',
-    };
-    const redraw = () => {
-      body.querySelectorAll('.mixrow').forEach((r) => r.remove());
-      drawRows();
-    };
+    hint.textContent = HINTS[mixMode];
     MODES.forEach(([id, label]) => {
       const b = document.createElement('button');
-      b.className = 'chip' + (mixMode === id ? ' on' : '');
       b.textContent = label;
+      b.className = mixMode === id ? 'on' : '';
       b.onclick = () => {
         mixMode = id;
         try { localStorage.setItem('mixMode', id); } catch (e) {}
         userVol = new Map();
-        $$('.chip', modes).forEach((x) => x.classList.toggle('on', x === b));
+        $$('button', seg).forEach((x) => x.classList.toggle('on', x === b));
         hint.textContent = HINTS[id];
         applyMix();
-        redraw();
+        drawRows();
       };
-      modes.append(b);
+      seg.append(b);
     });
-    hint.textContent = HINTS[mixMode];
-    body.append(modes, hint);
-
-    const vol = document.createElement('div');
-    vol.className = 'stepper';
-    vol.innerHTML = `<span>Общая громкость</span><input type="range" min="0" max="100" value="${Math.round(api.masterVolume * 100)}" style="width:50%">`;
-    $('input', vol).oninput = (e) => (api.masterVolume = e.target.value / 100);
-    body.append(vol);
+    const list = document.createElement('div');
+    const master = document.createElement('div');
+    master.className = 'knob';
+    master.style.marginTop = '10px';
+    master.innerHTML = `<span>Общая</span><input class="filled" type="range" min="0" max="100" value="${Math.round(api.masterVolume * 100)}" aria-label="Общая громкость"><output>${Math.round(api.masterVolume * 100)}</output>`;
+    const mIn = $('input', master);
+    paintRange(mIn);
+    mIn.oninput = () => { api.masterVolume = mIn.value / 100; $('output', master).textContent = mIn.value; };
+    body.append(seg, hint, list, master);
 
     function drawRows() {
+      list.innerHTML = '';
       curScore.tracks.forEach((t, i) => {
         const row = document.createElement('div');
-        row.className = 'trk mixrow';
-        row.style.flexWrap = 'wrap';
         const shown = api.tracks.includes(t);
-        const kind = t.isPercussion ? 'ударные' : (t.staves[0] && t.staves[0].stringTuning.tunings.length ? 'струнные' : 'другое');
-        row.innerHTML = `<div class="n"><div>${shown ? '▶ ' : ''}${esc(t.name || 'Дорожка ' + (i + 1))}</div><small>${kind}${shown ? ' · на экране' : ''}${mixMode === 'minus' && shown ? ' · не играет' : ''}</small></div>`;
+        row.className = 'trk' + (shown ? ' shown' : '');
+        const silent = mixMode === 'minus' && shown;
+        row.innerHTML = `<div class="n"><div>${esc(t.name || 'Дорожка ' + (i + 1))}</div><small>${trackKind(t)}${shown ? ' · на экране' : ''}${silent ? ' · молчит' : ''}</small></div>`;
         if (!t.isPercussion) {
           const show = document.createElement('button');
           show.className = 'mini' + (shown ? ' on' : '');
-          show.textContent = '👁';
-          show.title = 'Показать табы этой дорожки';
-          show.onclick = () => { renderedTrack = t; userVol = new Map(); api.renderTracks([t]); updateHeader(); applyMix(); redraw(); };
+          show.innerHTML = EYE;
+          show.setAttribute('aria-label', 'Показать табы этой дорожки');
+          show.onclick = () => { renderedTrack = t; userVol = new Map(); api.renderTracks([t]); updateHeader(); applyMix(); drawRows(); };
           row.append(show);
         }
         const m = document.createElement('button');
         m.className = 'mini' + (muted.has(i) ? ' on' : '');
-        m.textContent = 'M';
+        m.textContent = 'M'; m.setAttribute('aria-label', 'Заглушить');
         m.onclick = () => { const on = !muted.has(i); on ? muted.add(i) : muted.delete(i); applyMix(); m.classList.toggle('on', on); };
-        const s = document.createElement('button');
-        s.className = 'mini' + (soloed.has(i) ? ' on' : '');
-        s.textContent = 'S';
-        s.onclick = () => { const on = !soloed.has(i); on ? soloed.add(i) : soloed.delete(i); api.changeTrackSolo([t], on); s.classList.toggle('on', on); };
-        row.append(m, s);
-        const cur = userVol.has(i) ? userVol.get(i) : autoVol(t, renderedTrack);
+        const so = document.createElement('button');
+        so.className = 'mini' + (soloed.has(i) ? ' on' : '');
+        so.textContent = 'S'; so.setAttribute('aria-label', 'Только эта дорожка');
+        so.onclick = () => { const on = !soloed.has(i); on ? soloed.add(i) : soloed.delete(i); api.changeTrackSolo([t], on); so.classList.toggle('on', on); };
+        row.append(m, so);
         const sl = document.createElement('input');
-        sl.type = 'range'; sl.min = 0; sl.max = 100; sl.value = Math.round(cur * 100);
-        sl.style.cssText = 'width:100%;flex-basis:100%;margin-top:6px';
+        sl.type = 'range'; sl.min = 0; sl.max = 100; sl.className = 'filled';
+        sl.value = Math.round((userVol.has(i) ? userVol.get(i) : autoVol(t, renderedTrack)) * 100);
+        sl.setAttribute('aria-label', 'Громкость дорожки');
+        paintRange(sl);
         sl.oninput = () => { userVol.set(i, sl.value / 100); api.changeTrackVolume([t], sl.value / 100); };
         row.append(sl);
-        body.append(row);
+        list.append(row);
       });
     }
     drawRows();
+  });
+};
 
-    if (SOUNDFONTS[sfId].amp && AMP.installed) {
-      const ah = document.createElement('div');
-      ah.className = 'mixhint'; ah.style.marginTop = '14px'; ah.textContent = 'Гитарный усилитель';
-      const types = document.createElement('div'); types.className = 'chips';
-      const cur = AMP.preset;
-      [['dist', 'Дисторшн'], ['od', 'Овердрайв'], ['clean', 'Чистый']].forEach(([id, label]) => {
+/* ---------- Усилитель: автоподбор под песню и память ---------- */
+const AMP_NAMES = { dist: 'Дисторшн', od: 'Овердрайв', clean: 'Чистый' };
+let ampAuto = null;      // что подобрал автомат для текущей песни
+function songKey() { return curSong ? (curSong.id ? 's' + curSong.id : 't' + (curSong.title || '')) : null; }
+function savedAmp() { const k = songKey(); const all = store.get('ampSongs', {}); return k ? all[k] : null; }
+function saveSongAmp() {
+  const k = songKey(); if (!k) return;
+  const all = store.get('ampSongs', {});
+  all[k] = { preset: AMP.preset, drive: AMP.drive, low: AMP.low, mid: AMP.mid, high: AMP.high };
+  store.set('ampSongs', all);
+}
+function forgetSongAmp() { const k = songKey(); const all = store.get('ampSongs', {}); delete all[k]; store.set('ampSongs', all); }
+function detectAmp(score) {
+  const gtr = score.tracks.filter((t) => !t.isPercussion && t.staves[0] && t.staves[0].stringTuning.tunings.length >= 6);
+  const progs = new Set(gtr.map((t) => t.playbackInfo.program));
+  const low = Math.min(...gtr.map((t) => Math.min(...t.staves[0].stringTuning.tunings)), 40);
+  const why = [];
+  let preset = 'clean';
+  if (progs.has(30) || progs.has(31)) { preset = 'dist'; why.push('в табе гитара с перегрузом'); }
+  else if (progs.has(29)) { preset = 'od'; why.push('в табе гитара с овердрайвом'); }
+  else if (progs.has(28)) { preset = 'dist'; why.push('в табе глушёная гитара'); }
+  else why.push('в табе чистая гитара');
+  let drive = preset === 'clean' ? 0.45 : 0.5;
+  if (low <= 35) { drive = 0.72; why.push('7 струн / очень низкий строй'); if (preset === 'clean') preset = 'dist'; }
+  else if (low <= 38) { drive = Math.max(drive, 0.64); why.push('пониженный строй'); }
+  return { preset, drive, low: 0, mid: 0, high: 0, why: why.join(', ') };
+}
+function updateRouting() {
+  const useAmp = !!(SOUNDFONTS[sfId].amp && AMP.installed);
+  if (!curScore) { setAmp({ active: useAmp }); return; }
+  ampAuto = detectAmp(curScore);
+  const st = savedAmp() || ampAuto;
+  setAmp({ active: useAmp, preset: st.preset, drive: st.drive, low: st.low || 0, mid: st.mid || 0, high: st.high || 0 });
+}
+
+$('#btn-sound').onclick = () => {
+  if (!api) return toast('Сначала открой песню');
+  openSheet('Звук', (body) => {
+    const ampOn = SOUNDFONTS[sfId].amp && AMP.installed;
+    if (ampOn) {
+      const note = document.createElement('div');
+      note.className = 'auto-note';
+      const drawNote = () => {
+        const mine = !!savedAmp();
+        note.innerHTML = mine
+          ? `<span><b>Твои настройки</b> для этой песни</span><button>Вернуть авто</button>`
+          : `<span><b>Подобрано: ${AMP_NAMES[AMP.preset]}</b>${ampAuto ? ' — ' + esc(ampAuto.why) : ''}</span>`;
+        const b = $('button', note);
+        if (b) b.onclick = () => { forgetSongAmp(); updateRouting(); closeSheet(); $('#btn-sound').click(); };
+      };
+      drawNote();
+      const h = document.createElement('h3'); h.textContent = 'Усилитель';
+      const seg = document.createElement('div'); seg.className = 'seg';
+      Object.entries(AMP_NAMES).forEach(([id, label]) => {
         const b = document.createElement('button');
-        b.className = 'chip' + (cur === id ? ' on' : ''); b.textContent = label;
-        b.onclick = () => { AMP.userPreset = id; setAmp({ preset: id }); saveAmpPrefs(); $$('.chip', types).forEach((x) => x.classList.toggle('on', x === b)); };
-        types.append(b);
+        b.textContent = label; b.className = AMP.preset === id ? 'on' : '';
+        b.onclick = () => { setAmp({ preset: id }); saveSongAmp(); drawNote(); $$('button', seg).forEach((x) => x.classList.toggle('on', x === b)); };
+        seg.append(b);
       });
-      body.append(ah, types);
-      const knob = (label, key, min, max, step, toVal, fromVal) => {
-        const r = document.createElement('div'); r.className = 'stepper';
-        r.innerHTML = `<span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" value="${fromVal(AMP[key])}" style="width:55%">`;
-        $('input', r).oninput = (e) => { setAmp({ [key]: toVal(Number(e.target.value)) }); saveAmpPrefs(); };
+      body.append(note, h, seg);
+      const knob = (label, key, min, max, step, toVal, fromVal, fmt) => {
+        const r = document.createElement('div'); r.className = 'knob';
+        r.innerHTML = `<span>${label}</span><input class="filled" type="range" min="${min}" max="${max}" step="${step}" value="${fromVal(AMP[key])}" aria-label="${label}"><output></output>`;
+        const inp = $('input', r), out = $('output', r);
+        const show = () => { out.textContent = fmt(Number(inp.value)); paintRange(inp); };
+        show();
+        inp.oninput = () => { setAmp({ [key]: toVal(Number(inp.value)) }); show(); };
+        inp.onchange = () => { saveSongAmp(); drawNote(); };
         body.append(r);
       };
-      knob('Драйв', 'drive', 0, 100, 1, (v) => v / 100, (v) => Math.round(v * 100));
-      knob('Низ', 'low', -6, 6, 0.5, (v) => v, (v) => v);
-      knob('Середина', 'mid', -6, 6, 0.5, (v) => v, (v) => v);
-      knob('Верх', 'high', -6, 6, 0.5, (v) => v, (v) => v);
+      const db = (v) => (v > 0 ? '+' : '') + v;
+      knob('Драйв', 'drive', 0, 100, 1, (v) => v / 100, (v) => Math.round(v * 100), (v) => v);
+      knob('Низ', 'low', -6, 6, 0.5, (v) => v, (v) => v, db);
+      knob('Середина', 'mid', -6, 6, 0.5, (v) => v, (v) => v, db);
+      knob('Верх', 'high', -6, 6, 0.5, (v) => v, (v) => v, db);
     }
-
-    const sfh = document.createElement('div');
-    sfh.className = 'mixhint';
-    sfh.style.marginTop = '14px';
-    sfh.textContent = 'Звуки инструментов';
-    const sfs = document.createElement('div');
-    sfs.className = 'chips';
+    const h2 = document.createElement('h3'); h2.textContent = 'Набор звуков';
+    body.append(h2);
+    const SUBS = { amp: 'живая гитара через усилитель, остальное MuseScore', muse: 'общий набор инструментов', gu: 'запасной набор' };
     Object.entries(SOUNDFONTS).forEach(([id, f]) => {
       const b = document.createElement('button');
-      b.className = 'chip' + (sfId === id ? ' on' : '');
-      b.textContent = f.name;
-      b.onclick = () => { $$('.chip', sfs).forEach((x) => x.classList.toggle('on', x === b)); setSoundfont(id); };
-      sfs.append(b);
+      b.className = 'opt' + (sfId === id ? ' on' : '');
+      b.innerHTML = `<span>${esc(f.name)}<br><small>${SUBS[id] || ''}</small></span>${sfId === id ? '✓' : ''}`;
+      b.onclick = () => { closeSheet(); setSoundfont(id); };
+      body.append(b);
     });
-    body.append(sfh, sfs);
   });
 };
 
@@ -912,7 +1020,7 @@ $('#chip-dice').onclick = () => openRiff(makeRiff());
 let similarCache = {};
 async function loadSimilar() {
   const box = $('#similar');
-  if (!getApiBase()) { box.innerHTML = '<div class="note-box">Подключите воркер Cloudflare (настройки на вкладке «Песни»), и здесь появятся настоящие песни этого стиля с табами.</div>'; return; }
+  if (!getApiBase()) { box.innerHTML = '<div class="note-box">Подключи воркер Cloudflare в настройках на вкладке «Песни» — здесь появятся песни этого стиля с табами.</div>'; return; }
   const id = riffState.genre;
   if (similarCache[id]) return renderSimilar(similarCache[id]);
   box.innerHTML = '<div class="spinner-line">Ищу песни…</div>';
