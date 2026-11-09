@@ -39,8 +39,8 @@ export async function searchSongs(q, size = 20) {
 }
 
 export async function fetchTab(id) {
-  const res = await apiFetch(`/gp?id=${encodeURIComponent(id)}`);
-  return new Uint8Array(await res.arrayBuffer());
+  const res = await apiFetch(`/tab?id=${encodeURIComponent(id)}`);
+  return res.json();
 }
 
 // Избранное и история

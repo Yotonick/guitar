@@ -1,6 +1,7 @@
 import { TUNINGS, NOTE_NAMES, getTuning, noteName, noteOctave, midiToLabel, midiToFreq, freqToMidi, matchTuning } from './tunings.js';
 import { PitchDetector } from './tuner.js';
 import { GENRES, generateRiff } from './riff.js';
+import { bundleToTex } from './songsterr.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -434,9 +435,12 @@ async function openSong(song) {
   ensureApi();
   showLoader('Загружаю табулатуру…');
   try {
-    const data = await fetchTab(song.id);
+    const bundle = await fetchTab(song.id);
+    bundle.title = bundle.title || song.title;
+    bundle.artist = bundle.artist || song.artist;
+    const tex = bundleToTex(bundle);
     history.add(song);
-    loadScore(data, song, true);
+    loadTex(tex, song);
   } catch (err) {
     hideLoader();
     toast(err.message === 'NO_API' ? 'Сначала укажите адрес воркера в настройках' : 'Не удалось загрузить: ' + err.message, 4500);
