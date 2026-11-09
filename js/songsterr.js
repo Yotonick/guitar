@@ -5,6 +5,22 @@ const q = (s) => String(s ?? '').replace(/["\\\n\r]/g, ' ').trim();
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const isPow2 = (n) => n > 0 && (n & (n - 1)) === 0;
 
+// Ударные: у Songsterr (как в Guitar Pro 7) часть звуков записана расширенными номерами 82–127
+// (91 = малый римшот, 92 = полуоткрытый хэт, 93 = край райда…). Переводим в обычные MIDI-номера,
+// иначе эти удары пропадают. Таблица — из alphaTab (Guitar Pro 7 articulations).
+const GP_DRUM = {
+  82: 70, 83: 53, 84: 53, 86: 41, 87: 41,
+  91: 38, 92: 46, 93: 51, 94: 51, 95: 55, 96: 52, 97: 49, 98: 57,
+  99: 56, 100: 56, 101: 56, 102: 56, 103: 56, 104: 60, 105: 60, 106: 61, 107: 61,
+  108: 64, 109: 64, 110: 63, 111: 54, 112: 54, 113: 54, 114: 43, 115: 49, 116: 49,
+  117: 69, 118: 70, 119: 70, 120: 70, 122: 70, 123: 53, 124: 62, 125: 62, 126: 59, 127: 59,
+};
+export function gmDrum(n) {
+  n = Number(n);
+  if (GP_DRUM[n]) return GP_DRUM[n];
+  return n >= 35 && n <= 81 ? n : 0;
+}
+
 // Подбор GM-программы по названию инструмента
 function program(instrument, kind) {
   const s = String(instrument || '').toLowerCase();
@@ -78,10 +94,10 @@ function beatToTex(beat, kind, numStrings) {
   const used = new Set();
   for (const n of notes) {
     if (kind === 'drums') {
-      const m = Number(n.fret);
-      if (m >= 35 && m <= 81 && !used.has(m)) {
+      const m = gmDrum(n.fret);
+      if (m && !used.has(m)) {
         used.add(m);
-        toks.push(String(m));
+        toks.push(String(m) + (n.ghost ? '{g}' : ''));
       }
     } else {
       const str = Number(n.string) + 1; // у Songsterr 0 = высшая струна, в alphaTex 1 = высшая

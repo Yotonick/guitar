@@ -15,6 +15,7 @@ git push
 После деплоя нажать Ctrl+F5 (иначе браузер держит старый кэш).
 
 **Деплой:** свой workflow `.github/workflows/pages.yml` (Settings → Pages → Source: GitHub Actions). Ждёт GitHub до 30 минут вместо стандартных 10: в ноябре 2026 у GitHub Pages были массовые зависания `syncing_files`. На сайт уходят только `index.html, config.js, css, js, fonts, vendor`. Папка `_src/` в `.gitignore` (для исходных записей звуков).
+**Если деплой висит на `syncing_files`:** отменить запуск, удалить окружение (Settings → Environments → github-pages → Delete) и запустить заново (Actions → Deploy site → Run workflow). Окружение создаётся само. Помогло 10.11.
 
 Проверить сайт без деплоя: `python -m http.server 8000` в папке и открыть http://localhost:8000 (микрофон и усилитель работают только на localhost или https).
 

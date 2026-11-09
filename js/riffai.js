@@ -2,8 +2,9 @@
 // Модель: ритмические рисунки тактов + цепь Маркова по нотам (относительно тоники) + приёмы
 // + барабанные грувы, снятые с тех же песен. Всё считается прямо в браузере, без сервера.
 import { TUNINGS, matchTuning, noteName, noteOctave } from './tunings.js';
+import { gmDrum } from './songsterr.js';
 
-export const MODEL_VERSION = 1;
+export const MODEL_VERSION = 2;
 
 /* ---------- стили: группы-образцы и как их можно назвать ---------- */
 export const STYLES = {
@@ -135,7 +136,11 @@ function drumBars(part) {
         if (b.graceNote) continue;
         const l = sixteenths(b.duration);
         if (!l) return null;
-        if (!b.rest) for (const n of b.notes || []) if (n && !n.rest && n.fret != null && !n.tie) { const c = canonDrum(Number(n.fret)); if (c) slots[p].add(c); }
+        if (!b.rest) for (const n of b.notes || []) if (n && !n.rest && n.fret != null && !n.tie) {
+          let c = canonDrum(gmDrum(n.fret));
+          if (c === 38 && n.ghost) c = 138; // тихий «призрачный» удар — отдельно от сильной доли
+          if (c) slots[p].add(c);
+        }
         p += l;
       }
       if (p !== 16 && p !== 0) return null;
@@ -143,6 +148,19 @@ function drumBars(part) {
     if (!slots.some((s) => s.size)) return null;
     return slots.map((s) => [...s].sort((a, b) => a - b));
   });
+}
+// «Ровный» грув: малый на сильных местах (2 и 4, хаф-тайм на 3 или скэнк по слабым восьмым)
+// и регулярные тарелки. Затакты, брейки и ломаные такты в цикле звучат криво — их не берём.
+function isSteadyGroove(slots) {
+  const sn = slots.map((s, i) => (s.includes(38) ? i : -1)).filter((i) => i >= 0);
+  if (!sn.length) return false;
+  const back = sn.includes(4) && sn.includes(12);
+  const half = sn.includes(8) && !sn.includes(0);
+  const skank = [2, 6, 10, 14].filter((i) => sn.includes(i)).length >= 3;
+  if (!(back || half || skank)) return false;
+  if (sn.some((i) => i % 2 === 1) && !skank && sn.length > 3) return false; // малый на шестнадцатых — брейк
+  const cym = slots.map((s, i) => (s.some((n) => n === 42 || n === 46 || n === 51 || n === 52 || n === 49) ? i : -1)).filter((i) => i >= 0);
+  return cym.length >= 4 || sn.length >= 4;
 }
 function canonDrum(n) {
   if (n === 35 || n === 36) return 36;
@@ -202,7 +220,7 @@ export function trainModel(songs, meta = {}) {
     songs: [], tempos: [], tunings: {}, programs: {}, bassPrograms: {},
     rhythms: {}, first: {}, o0: {}, o1: {}, o2: {},
     tech: { notes: 0, sl: 0, b: 0, v: 0, st: 0, pmShort: 0, short: 0, x: 0, onsets: 0 },
-    drums: {}, fills: {}, kick: { hit: 0, tot: 0 }, bars: 0,
+    drums: {}, fills: {}, drumSong: {}, kick: { hit: 0, tot: 0 }, bars: 0,
   };
   for (const song of songs) {
     const parts = (song.parts || []).filter((p) => p && p.data && Array.isArray(p.data.measures));
@@ -213,7 +231,9 @@ export function trainModel(songs, meta = {}) {
     let used = 0;
     const tempo = ((parts[0].data.automations || {}).tempo || [])[0];
     if (tempo && tempo.bpm) M.tempos.push(Math.round(tempo.bpm));
-    const drumPart = parts.find((p) => p.kind === 'drums');
+    // настоящий барабанщик — дорожка, где больше всего бочки и малого (а не вертушки или перкуссия)
+    const kitScore = (p) => (p.data.measures || []).reduce((a, m) => a + (m.voices || []).reduce((b, v) => b + (v.beats || []).reduce((c, bt) => c + (bt.notes || []).filter((n) => n && [36, 38].includes(canonDrum(gmDrum(n.fret)))).length, 0), 0), 0);
+    const drumPart = parts.filter((p) => p.kind === 'drums').map((p) => [p, kitScore(p)]).sort((a, b) => b[1] - a[1]).map((x) => x[0])[0];
     const dBars = drumPart ? drumBars(drumPart) : [];
     const bassPart = parts.find((p) => p.kind === 'bass');
     if (bassPart) inc(M.bassPrograms, partProgram(bassPart));
@@ -277,9 +297,9 @@ export function trainModel(songs, meta = {}) {
       seenD.set(key, rep);
       if (rep > 4) return;
       const toms = slots.filter((s) => s.some((n) => n >= 41 && n <= 50 && n !== 42 && n !== 46 && n !== 49)).length;
-      const hasBeat = slots.some((s) => s.includes(38)) && slots.some((s) => s.includes(36));
+      const hasBeat = slots.some((s) => s.includes(36)) && isSteadyGroove(slots);
       if (toms >= 3) inc(M.fills, key, rep === 1 ? 1 : 0.4);
-      else if (hasBeat) inc(M.drums, key, rep === 1 ? 1 : 0.4);
+      else if (hasBeat) { inc(M.drums, key, rep === 1 ? 1 : 0.4); if (M.drumSong[key] == null) M.drumSong[key] = M.songs.length - 1; }
       const g = mainGtrBars && mainGtrBars[i];
       if (g && hasBeat) {
         for (const e of g) {
@@ -543,24 +563,36 @@ export function tuningLabel(notes) {
 
 /* ---------- барабаны ---------- */
 function makeDrums(M, rng, riff) {
-  const grooves = Object.keys(M.drums).length ? M.drums : null;
-  if (!grooves) return null;
+  if (!Object.keys(M.drums).length) return null;
   const follow = M.kick.tot ? M.kick.hit / M.kick.tot : 0;
   const n = riff.labels.length;
-  // один грув на А-такты, другой (или тот же) на Б — как барабанщик держит партию
+  // А и Б играются грувами из одной песни — чтобы ощущение не менялось на стыке
   const gA = pickGroove(M, rng);
-  const gB = rng() < 0.5 ? gA : pickGroove(M, rng);
+  const song = M.drumSong ? M.drumSong[gA] : null;
+  const same = song != null ? Object.fromEntries(Object.entries(M.drums).filter(([k]) => M.drumSong[k] === song && k !== gA)) : {};
+  const gB = Object.keys(same).length && rng() < 0.5 ? wpick(rng, same) : gA;
   const out = [];
+  const cache = {};
   riff.labels.forEach((lab, i) => {
     const bar = riff.sections[lab];
     let key = lab.startsWith('A') ? gA : gB;
-    if (i === n - 1 && n >= 4 && Object.keys(M.fills).length && rng() < 0.55) key = wpick(rng, M.fills);
-    const slots = key.split(' ').map((s) => (s ? s.split('+').map(Number) : []));
-    // бочка в унисон с гитарой, если в жанре так принято
-    if (follow > 0.45 && !(i === n - 1 && key !== gA && key !== gB)) {
-      for (const s of slots) { const k = s.indexOf(36); if (k >= 0) s.splice(k, 1); }
-      for (const e of bar) if (!e.r && !e.x && (rng() < follow + 0.15 || e.p % 4 === 0)) slots[e.p].push(36);
+    const fill = i === n - 1 && n >= 4 && Object.keys(M.fills).length && rng() < 0.5;
+    if (fill) key = wpick(rng, M.fills);
+    let slots = cache[lab + '|' + key];
+    if (!slots) {
+      slots = key.split(' ').map((s) => (s ? s.split('+').map(Number) : []));
+      // бочка в унисон с гитарой (если так принято в жанре): только на нотах по восьмой сетке
+      // и только там, где гитара бьёт (чаг/аккорд), — без случайностей, одинаково в каждом повторе
+      if (follow > 0.45 && !fill) {
+        const hits = bar.filter((e) => !e.r && !e.x).map((e) => e.p);
+        const sixteenthGrid = hits.filter((p) => p % 2 === 1).length > hits.length * 0.4;
+        for (const s of slots) { const k = s.indexOf(36); if (k >= 0) s.splice(k, 1); }
+        for (const p of hits) if (sixteenthGrid || p % 2 === 0) slots[p].push(36);
+        if (!slots[0].includes(36) && hits.includes(0)) slots[0].push(36);
+      }
+      cache[lab + '|' + key] = slots;
     }
+    slots = slots.map((s) => s.slice());
     if (i === 0) { if (!slots[0].includes(49)) slots[0].push(49); const h = slots[0].indexOf(42); if (h >= 0) slots[0].splice(h, 1); }
     out.push(slots.map((s) => [...new Set(s)].sort((a, b) => a - b)));
   });
@@ -655,7 +687,8 @@ function drumTex(slots) {
   while (i < 16) {
     let j = i + 1;
     while (j < 16 && !slots[j].length) j++;
-    const notes = slots[i];
+    // «призрачный» малый (138) пишем как 38 с пометкой g; если в этой точке есть и сильный удар — тихий не нужен
+    const notes = slots[i].filter((n) => !(n === 138 && slots[i].includes(38))).map((n) => (n === 138 ? '38{g}' : String(n)));
     splitLen(j - i).forEach(([, v, dot], k) => {
       if (k > 0) toks.push(`:${v} r${dot}`);
       else toks.push(`:${v} ${notes.length > 1 ? '(' + notes.join(' ') + ')' : notes[0]}${dot}`);

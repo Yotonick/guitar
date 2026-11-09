@@ -218,7 +218,8 @@ input.filled::-webkit-slider-runnable-track { background: linear-gradient(90deg,
 .at-surface { font-family: sans-serif; }
 .at-cursors { position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; }
 .at-cursor-bar { background: rgba(240,163,58,.08); }
-.at-cursor-beat { background: var(--amber); width: 3px; border-radius: 2px; box-shadow: 0 0 8px rgba(240,163,58,.6); }
+/* курсор — растягиваемый элемент высотой 1px (alphaTab двигает его transform: scale). Без скруглений и теней: на телефонах они мерцают */
+.at-cursor-beat { background: var(--amber); width: 3px; }
 .at-selection div { background: rgba(240,163,58,.16); }
 .at-highlight * { fill: var(--amber); stroke: var(--amber); }
 
