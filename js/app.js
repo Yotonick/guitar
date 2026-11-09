@@ -519,8 +519,8 @@ document.addEventListener('input', (e) => { if (e.target.matches && e.target.mat
 
 /* --- звуки и микшер --- */
 const SOUNDFONTS = {
-  // живой Fender (сырой — в усилитель, чистый — запечённый) + живые барабаны MuldjordKit поверх MuseScore
-  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: ['vendor/alphatab/soundfont/EGuitar_Live.sf3', 'vendor/alphatab/soundfont/Drums_Live.sf3'], amp: true },
+  // живой Fender (сырой — в усилитель, чистый — запечённый), живой бас Yamaha и барабаны MuldjordKit поверх MuseScore
+  amp: { name: 'Гитара + усилитель', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3', overlay: ['vendor/alphatab/soundfont/EGuitar_Live.sf3', 'vendor/alphatab/soundfont/Bass_Live.sf3', 'vendor/alphatab/soundfont/Drums_Live.sf3'], amp: true },
   muse: { name: 'MuseScore General', file: 'vendor/alphatab/soundfont/MuseScore_General_Lite.sf3' },
   gu: { name: 'GeneralUser GS', file: 'vendor/alphatab/soundfont/GeneralUser-GS.sf2' },
 };
