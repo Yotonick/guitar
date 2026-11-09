@@ -4,3 +4,6 @@ EGuitarFSBS-*/
 MuldjordKit*/
 PickedBassYR*/
 *.flac
+# копии файлов из чата с Claude
+Claude outputs/
+NOTES-*.md

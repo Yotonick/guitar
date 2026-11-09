@@ -647,6 +647,7 @@ function ensureApi() {
     $('#t-cur').textContent = fmtTime(e.currentTime);
     $('#t-end').textContent = fmtTime(e.endTime);
     if (!seeking && e.endTime) { $('#seek').value = Math.round((e.currentTime / e.endTime) * 1000); paintRange($('#seek')); }
+    trainerOnPosition(e);
   });
   api.beatMouseUp.on((beat) => { if (beat && pick.active) onPickBar(beat); });
   return api;
@@ -720,6 +721,7 @@ seekEl.addEventListener('input', () => {
 
 $$('#speed-chips button').forEach((b) =>
   b.addEventListener('click', () => {
+    stopTrainer('Тренер выключен — скорость вручную');
     $$('#speed-chips button').forEach((x) => x.classList.toggle('on', x === b));
     if (api) api.playbackSpeed = Number(b.dataset.v);
   })
@@ -763,6 +765,7 @@ function onPickBar(beat) {
   }
 }
 function clearLoop() {
+  stopTrainer();
   pick = { active: false, first: null };
   if (api) { api.playbackRange = null; api.isLooping = false; }
   $('#btn-loop').classList.remove('on');
@@ -777,6 +780,90 @@ $('#btn-loop').onclick = () => {
     $('#btn-loop').classList.add('on');
     toast('Нажмите на первый такт фрагмента', 3500);
   }
+};
+
+/* ---------- Тренер скорости ----------
+   Фрагмент (или вся песня) крутится по кругу, темп сам растёт: старт → +шаг каждые N кругов → цель. */
+const trainer = { on: false, start: 60, step: 5, target: 100, every: 1, laps: 0, speed: 1, lastT: 0 };
+Object.assign(trainer, store.get('trainer', {}), { on: false });
+function setSpeedUi(v) { $$('#speed-chips button').forEach((x) => x.classList.toggle('on', Math.abs(Number(x.dataset.v) - v) < 0.001)); }
+function trainerLabel() {
+  const c = $('#chip-trainer');
+  c.textContent = trainer.on ? `Тренер · ${Math.round(trainer.speed * 100)}%` : 'Тренер';
+  c.classList.toggle('on', trainer.on);
+}
+function stopTrainer(msg) {
+  if (!trainer.on) return;
+  trainer.on = false;
+  trainerLabel();
+  if (msg) toast(msg);
+}
+function startTrainer() {
+  if (!api || !curScore) return toast('Сначала открой песню');
+  trainer.on = true; trainer.laps = 0; trainer.lastT = 0;
+  trainer.speed = trainer.start / 100;
+  store.set('trainer', { start: trainer.start, step: trainer.step, target: trainer.target, every: trainer.every });
+  api.playbackSpeed = trainer.speed;
+  setSpeedUi(trainer.speed);
+  api.isLooping = true; // фрагмент не выбран — по кругу вся песня
+  trainerLabel();
+  api.stop();
+  setTimeout(() => api.play(), 150);
+  toast(`Старт ${trainer.start}%, +${trainer.step}% каждые ${trainer.every} ${trainer.every === 1 ? 'круг' : trainer.every < 5 ? 'круга' : 'кругов'}`, 2600);
+}
+function trainerOnPosition(e) {
+  if (!trainer.on) return;
+  const t = e.currentTime;
+  // время прыгнуло назад во время игры — значит, начался новый круг
+  if (!seeking && api.playerState === 1 && t < trainer.lastT - 300) {
+    trainer.laps++;
+    const goal = trainer.target / 100;
+    if (trainer.laps % trainer.every === 0 && trainer.speed < goal - 1e-6) {
+      trainer.speed = Math.min(goal, Math.round((trainer.speed + trainer.step / 100) * 100) / 100);
+      api.playbackSpeed = trainer.speed;
+      setSpeedUi(trainer.speed);
+      trainerLabel();
+      toast(trainer.speed >= goal - 1e-6 ? `Цель ${trainer.target}% — держим темп` : `Темп ${Math.round(trainer.speed * 100)}%`, 1400);
+    }
+  }
+  trainer.lastT = t;
+}
+$('#btn-stop').addEventListener('click', () => { trainer.lastT = 0; });
+$('#chip-trainer').onclick = () => {
+  if (!api || !curScore) return toast('Сначала открой песню');
+  openSheet('Тренер скорости', (body) => {
+    const hint = document.createElement('div');
+    hint.className = 'mixhint';
+    const looped = $('#btn-loop').classList.contains('on') && api.playbackRange;
+    hint.textContent = looped
+      ? 'Крутится выбранный фрагмент. Темп растёт сам после каждого круга.'
+      : 'Фрагмент не выбран — по кругу пойдёт вся песня. Чтобы тренировать кусок, сначала поставь цикл (кнопка со стрелками → первый и последний такт).';
+    body.append(hint);
+    const knob = (label, key, min, max, step, fmt) => {
+      const r = document.createElement('div'); r.className = 'knob';
+      r.innerHTML = `<span>${label}</span><input class="filled" type="range" min="${min}" max="${max}" step="${step}" value="${trainer[key]}" aria-label="${label}"><output></output>`;
+      const inp = $('input', r), out = $('output', r);
+      const show = () => { out.textContent = fmt(Number(inp.value)); paintRange(inp); };
+      show();
+      inp.oninput = () => { trainer[key] = Number(inp.value); show(); };
+      body.append(r);
+    };
+    knob('Старт', 'start', 30, 100, 5, (v) => v + '%');
+    knob('Шаг', 'step', 1, 15, 1, (v) => '+' + v + '%');
+    knob('Цель', 'target', 50, 150, 5, (v) => v + '%');
+    knob('Каждые', 'every', 1, 8, 1, (v) => v + ' кр.');
+    const go = document.createElement('button');
+    go.className = 'primary big';
+    go.style.marginTop = '16px';
+    go.textContent = trainer.on ? 'Остановить тренер' : 'Запустить';
+    go.onclick = () => {
+      closeSheet();
+      if (trainer.on) { stopTrainer('Тренер остановлен'); api.pause(); return; }
+      if (trainer.target < trainer.start) trainer.target = trainer.start;
+      startTrainer();
+    };
+    body.append(go);
+  });
 };
 
 /* ---------- Шторка «Дорожки» ---------- */
