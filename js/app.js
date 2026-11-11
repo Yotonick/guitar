@@ -1,7 +1,8 @@
 import { TUNINGS, NOTE_NAMES, getTuning, noteName, noteOctave, midiToLabel, midiToFreq, freqToMidi, matchTuning } from './tunings.js';
 import { PitchDetector } from './tuner.js';
 import { GENRES, generateRiff } from './riff.js';
-import { STYLES, parseStyleQuery, trainModel, generateRiff as aiRiff, varyRiff, collectSongs, MODEL_VERSION, tuningLabel } from './riffai.js';
+import { STYLES, parseStyleQuery, trainModel, generateRiff as aiRiff, varyRiff, collectSongs, MODEL_VERSION, tuningLabel, riffToTex } from './riffai.js';
+import { trainLead, addLead, LEAD_VERSION } from './leadai.js';
 import { bundleToTex } from './songsterr.js';
 import { installAmpHook, setAmp, AMP, loadAmpPrefs, saveAmpPrefs } from './amp.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
@@ -615,7 +616,12 @@ function ensureApi() {
     soloed = new Set();
     userVol = new Map();
     routeScore(score);
-    const idx = score.tracks.findIndex((t) => !t.isPercussion && t.staves[0] && t.staves[0].stringTuning.tunings.length > 0);
+    let idx = score.tracks.findIndex((t) => !t.isPercussion && t.staves[0] && t.staves[0].stringTuning.tunings.length > 0);
+    // у соло и мелодии сразу показываем их дорожку
+    if (curSong && curSong.riff && curSong.riff.leadMode) {
+      const li = score.tracks.findIndex((t) => t.name === 'Lead' || t.name === 'Melody');
+      if (li >= 0) idx = li;
+    }
     const want = idx >= 0 ? idx : 0;
     renderedTrack = score.tracks[want];
     updateHeader();
@@ -660,6 +666,7 @@ function loadScore(data, meta, alreadyInPlayer) {
   lastRiff = meta.riff || null;
   $('#chip-dice').classList.toggle('hidden', !lastRiff);
   $('#chip-vary').classList.toggle('hidden', !(lastRiff && lastRiff.ai));
+  syncLeadChips();
   clearLoop();
   showLoader('Рисую табы…');
   $('#seek').value = 0;
@@ -675,6 +682,7 @@ function loadTex(tex, meta) {
   lastRiff = meta.riff || null;
   $('#chip-dice').classList.toggle('hidden', !lastRiff);
   $('#chip-vary').classList.toggle('hidden', !(lastRiff && lastRiff.ai));
+  syncLeadChips();
   clearLoop();
   showLoader('Рисую табы…');
   $('#seek').value = 0;
@@ -1054,7 +1062,18 @@ const riffState = {
   genre: 'numetal',
   style: { key: 'numetal', name: STYLES.numetal.name, artists: STYLES.numetal.artists, builtin: true },
   tempoAuto: true, tempo: 100, bars: 4, tuning: 'auto', drums: true,
+  what: store.get('riffWhat', 'riff'), // рифф / рифф + соло / мелодия поверх риффа
 };
+const GEN_LABEL = { riff: 'Сочинить рифф', solo: 'Сочинить соло', melody: 'Сочинить мелодию' };
+const genLabel = () => GEN_LABEL[riffState.mode === 'ai' ? riffState.what : 'riff'];
+function setWhat(w) {
+  riffState.what = w;
+  store.set('riffWhat', w);
+  $$('#riff-what button').forEach((x) => x.classList.toggle('on', x.dataset.v === w));
+  if (!$('#btn-generate').disabled) $('#btn-generate').textContent = genLabel();
+  updateAiStatus();
+}
+$$('#riff-what button').forEach((b) => (b.onclick = () => setWhat(b.dataset.v)));
 const genresBox = $('#genres');
 Object.entries(GENRES).forEach(([id, g]) => {
   const b = document.createElement('button');
@@ -1093,6 +1112,8 @@ function setRiffMode(m) {
   store.set('riffMode', m);
   $$('#riff-mode button').forEach((x) => x.classList.toggle('on', x.dataset.v === m));
   $('#style-form').classList.toggle('hidden', m !== 'ai');
+  $('#riff-what').classList.toggle('hidden', m !== 'ai');
+  if (!$('#btn-generate').disabled) $('#btn-generate').textContent = genLabel();
   updateAiStatus();
 }
 $$('#riff-mode button').forEach((b) => (b.onclick = () => setRiffMode(b.dataset.v)));
@@ -1152,11 +1173,16 @@ function setProgress(frac, text) {
   if (frac != null) $('i', bar).style.width = Math.round(frac * 100) + '%';
   const btn = $('#btn-generate');
   btn.disabled = frac != null;
-  btn.textContent = frac != null ? text : 'Сочинить рифф';
+  btn.textContent = frac != null ? text : genLabel();
 }
 
-async function ensureModel(st, force) {
-  if (!force) { const m = getModel(st); if (m) return m; }
+const hasLead = (m) => !!(m && m.lead && m.lead.v === LEAD_VERSION);
+async function ensureModel(st, force, needLead) {
+  if (!force) {
+    const m = getModel(st);
+    if (m && (!needLead || hasLead(m))) return m;
+    if (m) return upgradeLead(st, m);
+  }
   if (training && training.key === st.key) return training.promise;
   const promise = (async () => {
     try {
@@ -1167,6 +1193,7 @@ async function ensureModel(st, force) {
       });
       setProgress(0.95, 'Учусь…');
       const m = trainModel(songs, { key: st.key, name: st.name });
+      m.lead = trainLead(songs);
       if (m.songs.length < 2 || !Object.keys(m.rhythms).length) throw new Error('Нашлось слишком мало подходящих табов. Попробуй другие группы.');
       saveModel(st, m);
       return m;
@@ -1175,6 +1202,40 @@ async function ensureModel(st, force) {
       setProgress(null);
       updateAiStatus();
       loadSimilar(); // показать, на чём учился ИИ
+    }
+  })();
+  training = { key: st.key, promise };
+  return promise;
+}
+
+// Модель, выученная до появления соло: дослушиваем те же песни и учим только соло и мелодии
+async function upgradeLead(st, m) {
+  if (training && training.key === st.key) return training.promise;
+  const promise = (async () => {
+    try {
+      const list = m.songs.filter((s) => s.id);
+      if (!list.length) throw new Error('Не нашёл песни модели — нажми «переобучить»');
+      let done = 0;
+      const songs = [];
+      const queue = list.slice();
+      setProgress(0.02, 'Учу соло…');
+      const work = async () => {
+        while (queue.length) {
+          const s = queue.shift();
+          try { songs.push(await fetchTab(s.id)); } catch (e) { /* пропускаем */ }
+          done++;
+          setProgress(0.05 + 0.9 * (done / list.length), `Учу соло: ${done}/${list.length}`);
+          $('#ai-status').textContent = `${s.artist} — ${s.title}`;
+        }
+      };
+      await Promise.all([work(), work(), work(), work()]);
+      m.lead = trainLead(songs);
+      saveModel(st, m);
+      return m;
+    } finally {
+      training = null;
+      setProgress(null);
+      updateAiStatus();
     }
   })();
   training = { key: st.key, promise };
@@ -1190,12 +1251,15 @@ function updateAiStatus() {
   const m = getModel(st);
   if (m) {
     const d = new Date(m.at);
-    box.innerHTML = `<b>${esc(st.name)}</b>: обучен на ${m.songs.length} песнях · ${d.toLocaleDateString('ru-RU')} · <button id="ai-retrain">переобучить</button>`;
+    const leadNote = riffState.what === 'riff' ? ''
+      : hasLead(m) ? ` · соло-тактов: ${Math.round(m.lead.barsS)}, мелодий: ${Math.round(m.lead.barsM)}`
+      : ' · для соло доучусь на тех же песнях (~минута)';
+    box.innerHTML = `<b>${esc(st.name)}</b>: обучен на ${m.songs.length} песнях · ${d.toLocaleDateString('ru-RU')}${leadNote} · <button id="ai-retrain">переобучить</button>`;
     $('#ai-retrain').onclick = async () => {
       try { await ensureModel(st, true); toast('Модель обновлена'); } catch (e) { toast(e.message || 'Не получилось', 4000); }
     };
   } else {
-    box.innerHTML = `<b>${esc(st.name)}</b>: при первом запуске скачаю ~20 песен этого стиля и выучу их риффы (около минуты, потом мгновенно).`;
+    box.innerHTML = `<b>${esc(st.name)}</b>: при первом запуске скачаю ~20 песен этого стиля и выучу их риффы, соло и мелодии (около минуты, потом мгновенно).`;
   }
 }
 
@@ -1225,7 +1289,16 @@ function openRiff(r) {
 }
 function openAiRiff(r, st) {
   const meta = { ...r, ai: true, styleKey: st.key, styleName: st.name, style: st };
-  loadTex(r.tex, { id: null, title: r.title, artist: `${st.name} · ${r.tempo} BPM · ${tuningLabel(r.tuning)}`, riff: meta });
+  const what = r.leadMode === 'solo' ? ' · соло' : r.leadMode === 'melody' ? ' · мелодия' : '';
+  loadTex(r.tex, { id: null, title: r.title, artist: `${st.name}${what} · ${r.tempo} BPM · ${tuningLabel(r.tuning)}`, riff: meta });
+}
+const withLead = (m, r, mode, opts) => (mode && mode !== 'riff' ? addLead(m, r, mode, opts, riffToTex) : r);
+const modelOf = (r) => models.get(r.styleKey) || getModel(r.style);
+function syncLeadChips() {
+  const lead = lastRiff && lastRiff.ai && lastRiff.leadMode;
+  $('#chip-lead').classList.toggle('hidden', !lead);
+  if (lead) $('#chip-lead').textContent = lead === 'melody' ? 'Другая мелодия' : 'Другое соло';
+  $('#chip-dice').textContent = lead ? 'Новый рифф' : 'Ещё рифф';
 }
 
 async function composeRiff() {
@@ -1233,8 +1306,9 @@ async function composeRiff() {
   if (!useAi) return openRiff(makeRiff());
   const st = riffState.style;
   try {
-    const m = await ensureModel(st);
-    openAiRiff(aiRiff(m, riffOpts()), st);
+    const mode = riffState.what;
+    const m = await ensureModel(st, false, mode !== 'riff');
+    openAiRiff(withLead(m, aiRiff(m, riffOpts()), mode), st);
   } catch (e) {
     toast((e && e.message) || 'Не получилось обучиться', 4500);
   }
@@ -1244,18 +1318,31 @@ $('#btn-generate').onclick = composeRiff;
 // «Ещё рифф» в плеере: тем же способом, каким сделан текущий
 $('#chip-dice').onclick = () => {
   if (lastRiff && lastRiff.ai) {
-    const m = models.get(lastRiff.styleKey) || getModel(lastRiff.style);
-    if (m) return openAiRiff(aiRiff(m, { ...lastRiff.opts, tempo: riffState.tempoAuto ? undefined : lastRiff.opts.tempo }), lastRiff.style);
+    const m = modelOf(lastRiff);
+    if (m) return openAiRiff(withLead(m, aiRiff(m, { ...lastRiff.opts, tempo: riffState.tempoAuto ? undefined : lastRiff.opts.tempo }), lastRiff.leadMode), lastRiff.style);
   }
   openRiff(makeRiff());
 };
 // «Вариация»: тот же рифф, но развитый
 $('#chip-vary').onclick = () => {
   if (!lastRiff || !lastRiff.ai) return;
-  const m = models.get(lastRiff.styleKey) || getModel(lastRiff.style);
+  const m = modelOf(lastRiff);
   if (!m) return toast('Модель стиля не найдена — сочини рифф заново');
+  if (lastRiff.leadMode) {
+    // вариация соло: тот же рифф и тот же ритм соло, другие ноты и приёмы
+    const gen = (lastRiff.leadGen || 0) + 1;
+    openAiRiff(withLead(m, lastRiff, lastRiff.leadMode, { rseed: lastRiff.leadSeeds.r, gen }), lastRiff.style);
+    return toast('Вариация ' + gen, 1400);
+  }
   openAiRiff(varyRiff(m, lastRiff), lastRiff.style);
   toast('Вариация ' + ((lastRiff.gen || 0)), 1400);
+};
+// «Другое соло»: тот же рифф, новое соло (или мелодия)
+$('#chip-lead').onclick = () => {
+  if (!lastRiff || !lastRiff.leadMode) return;
+  const m = modelOf(lastRiff);
+  if (!m) return toast('Модель стиля не найдена — сочини заново');
+  openAiRiff(withLead(m, lastRiff, lastRiff.leadMode), lastRiff.style);
 };
 
 /* --- песни стиля: на чём учился ИИ, или образцы жанра --- */
@@ -1285,6 +1372,7 @@ function renderSimilar(list) {
   list.forEach((s) => box.append(songRow(s)));
 }
 setRiffMode(riffState.mode);
+setWhat(riffState.what);
 loadSimilar();
 syncTempoUi();
 renderSongs();

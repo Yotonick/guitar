@@ -54,7 +54,7 @@ export function mulberry32(a) {
   };
 }
 const inc = (obj, k, w = 1) => { obj[k] = (obj[k] || 0) + w; };
-function wpick(rng, table) {
+export function wpick(rng, table) {
   // table: {key: weight} или [[key, weight]]
   const arr = Array.isArray(table) ? table : Object.entries(table);
   let sum = 0;
@@ -73,7 +73,7 @@ const sixteenths = (dur) => {
 };
 
 /* ---------- разбор табов Songsterr ---------- */
-function partProgram(part) {
+export function partProgram(part) {
   const id = part.data && part.data.instrumentId;
   if (typeof id === 'number') return id;
   const s = String(part.instrument || '').toLowerCase();
@@ -85,7 +85,7 @@ function partProgram(part) {
 }
 
 // Такты гитары в сетке шестнадцатых (только 4/4, без триолей и тридцать вторых)
-function guitarBars(part) {
+export function guitarBars(part) {
   const d = part.data || {};
   const tun = Array.isArray(d.tuning) ? d.tuning : [];
   if (tun.length < 4) return [];
@@ -175,7 +175,7 @@ function canonDrum(n) {
 }
 
 // Тоника песни: самая «весомая» нота среди низов
-function songTonic(bars, lowOpen) {
+export function songTonic(bars, lowOpen) {
   const pc = new Array(12).fill(0);
   for (const ev of bars) {
     if (!ev) continue;
@@ -713,6 +713,8 @@ export function riffToTex(M, riff, opts = {}) {
   let tex = `\\title "${q(title)}"\n\\artist "Riff Lab · ИИ"\n\\tempo ${riff.tempo}\n`;
   tex += `\\track "Guitar"\n\\instrument ${riff.program}\n\\tuning (${texName(tuning)})\n`;
   tex += gBars.map((b) => barTex(b, tuning.length)).join(' |\n') + '\n';
+  // соло или мелодия поверх риффа (собирается в leadai.js)
+  if (riff.leadTex) tex += riff.leadTex;
   if (opts.bass !== false) {
     // бас в унисон с гитарой октавой ниже, строй под гитару
     const bt = tuning.slice(0, 4).map((m) => m - 12);
