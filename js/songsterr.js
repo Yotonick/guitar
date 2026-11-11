@@ -1,7 +1,7 @@
 // Конвертер: JSON нот Songsterr -> alphaTex (для плеера alphaTab)
 import { noteName, noteOctave } from './tunings.js';
 
-const q = (s) => String(s ?? '').replace(/["\\\n\r]/g, ' ').trim();
+const q = (s) => String(s ?? '').replace(/["\\\u0000-\u001f\u007f]/g, ' ').trim();
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const isPow2 = (n) => n > 0 && (n & (n - 1)) === 0;
 
@@ -117,7 +117,10 @@ function beatToTex(beat, kind, numStrings) {
 function tempoMap(data) {
   const arr = (data.automations && data.automations.tempo) || [];
   const m = new Map();
-  for (const t of arr) if (t && t.bpm) m.set(Number(t.measure) || 0, Math.round(t.bpm));
+  for (const t of arr) {
+    const bpm = Math.round(Number(t && t.bpm));
+    if (bpm > 0 && bpm < 1000) m.set(Number(t.measure) || 0, bpm);
+  }
   return m;
 }
 

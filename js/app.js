@@ -4,6 +4,7 @@ import { GENRES, generateRiff } from './riff.js';
 import { STYLES, parseStyleQuery, trainModel, generateRiff as aiRiff, varyRiff, collectSongs, MODEL_VERSION, tuningLabel, riffToTex } from './riffai.js';
 import { trainLead, addLead, LEAD_VERSION } from './leadai.js';
 import { bundleToTex } from './songsterr.js';
+import { repairTex } from './texfix.js';
 import { installAmpHook, setAmp, AMP, loadAmpPrefs, saveAmpPrefs } from './amp.js';
 import { store, getApiBase, setApiBase, searchSongs, fetchTab, favorites, history } from './data.js';
 
@@ -609,7 +610,13 @@ function ensureApi() {
     },
   });
 
-  api.error.on((e) => { hideLoader(); toast('Ошибка: ' + (e && e.message ? e.message : e), 5000); });
+  api.error.on((e) => {
+    hideLoader();
+    console.error('alphaTab', e, e && (e.inner || e.cause));
+    const inner = e && (e.inner || e.cause);
+    const why = inner && inner.semanticDiagnostics ? ['lexerDiagnostics', 'parserDiagnostics', 'semanticDiagnostics'].flatMap((k) => (inner[k] && inner[k].items) || []).map((d) => d.message)[0] : '';
+    toast('Ошибка: ' + (e && e.message ? e.message : e) + (why ? ' — ' + why : ''), 6000);
+  });
   api.scoreLoaded.on((score) => {
     curScore = score;
     muted = new Set();
@@ -686,7 +693,13 @@ function loadTex(tex, meta) {
   clearLoop();
   showLoader('Рисую табы…');
   $('#seek').value = 0;
-  api.tex(tex);
+  // битые места в табе не должны ломать всю песню: чиним заранее
+  let fix = { tex };
+  try { fix = repairTex(tex, window.alphaTab); } catch (e) { console.warn('texfix', e); }
+  if (fix.notes && fix.notes.length) console.warn('alphaTex: починил', fix.fixedBars, 'тактов', fix.notes, { original: tex });
+  if (fix.failed) window.__badTex = tex;
+  else if (fix.fixedBars) setTimeout(() => toast(`В табе ${fix.fixedBars} ${fix.fixedBars === 1 ? 'битый такт' : 'битых такта(ов)'} — заменил паузами`, 3500), 600);
+  api.tex(fix.tex);
   updateFav();
 }
 
